@@ -30,8 +30,20 @@ interface Rule {
 const RULES: Rule[] = [
   { re: /^COMPRA\s+(.+)$/i, kind: (c) => (c ? 'refund' : 'purchase'), merchant: (m) => titleCase(stripCodes(m[1])) },
   { re: /^REDIVA\s+\d*\s*(.+)$/i, kind: () => 'refund', merchant: (m) => titleCase(stripCodes(m[1])) },
-  { re: /^CRE\.\s*CAMBIOSOP/i, kind: () => 'fx', merchant: () => 'Cambio de moneda' },
-  { re: /^DEB\.\s*CAMBIOSST/i, kind: () => 'transfer', merchant: () => 'Santander (cuenta propia)' },
+  // Bank-format meaning only. What these are for one person (own accounts, salary, currency exchange) is that
+  // user's knowledge, kept in their own rules, so the parser flags them for review instead of guessing.
+  {
+    re: /^CRE\.\s*CAMBIOSOP/i,
+    kind: () => 'income',
+    merchant: () => 'Crédito por transferencia',
+    review: () => 'incoming transfer or currency exchange: income, own-account move or exchange?',
+  },
+  {
+    re: /^DEB\.\s*CAMBIOSST/i,
+    kind: () => 'purchase',
+    merchant: () => 'Transferencia saliente',
+    review: () => 'outgoing transfer: to one of your own accounts, or a payment?',
+  },
   { re: /^DEB\.\s*CAMBIOSCOM/i, kind: () => 'fee', merchant: () => 'Itaú' },
   {
     re: /^(DEB|CRE)\.\s*CAMBIOSTOL[CD]/i,

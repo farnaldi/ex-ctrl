@@ -55,11 +55,11 @@ describe('itau-account parser', () => {
       [
         ['purchase', 500, 'ANCAP'],
         ['refund', -9.5, 'ANCAP'],
-        ['transfer', 2000, 'Santander (cuenta propia)'],
+        ['purchase', 2000, 'Transferencia saliente'],
         ['purchase', 1200, 'Cuota Febrero'],
         ['purchase', 2600, null],
         ['fee', 45, 'Itaú'],
-        ['fx', -40000, 'Cambio de moneda'],
+        ['income', -40000, 'Crédito por transferencia'],
         ['tax', 4000, 'DGI'],
         ['cash_withdrawal', 1000, 'Efectivo'],
       ],
