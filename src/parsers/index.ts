@@ -43,8 +43,11 @@ export function fingerprintAll(statement: ParsedStatement): string[] {
 }
 
 export function parseFile(path: string): ParsedFile & { fingerprints: string[] } {
-  const buf = readFileSync(path);
-  const fileName = basename(path);
+  return parseBuffer(readFileSync(path), basename(path));
+}
+
+/** Parse an uploaded export (web upload, MCP tool). */
+export function parseBuffer(buf: Buffer, fileName: string): ParsedFile & { fingerprints: string[] } {
   const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
 
   for (const sheetName of wb.SheetNames) {

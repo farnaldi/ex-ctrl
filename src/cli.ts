@@ -2,7 +2,8 @@
 /**
  * finance CLI
  *
- *   finance migrate                                   apply db/schema.sql            (ADMIN_DATABASE_URL)
+ *   finance migrate                                   schema + migrations, roles, auth tables
+ *                                                     (ADMIN_DATABASE_URL; roles from DATABASE_URL and AUTH_DATABASE_URL)
  *   finance user:create <email> [display name]        create a user, print its id    (ADMIN_DATABASE_URL)
  *   finance import --user <id> [--dry-run] [--force] <files...>                       (DATABASE_URL)
  *   finance forecast --user <id> [--month YYYY-MM]    totals per currency and per tag (DATABASE_URL)
@@ -18,6 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import pg from 'pg';
+import { migrate } from './core/migrate.ts';
 import { importFile, type Db } from './importer.ts';
 import { parseFile } from './parsers/index.ts';
 
@@ -66,11 +68,18 @@ const fmt = (n: number | string) => Number(n).toLocaleString('es-UY', { minimumF
 async function main() {
   switch (command) {
     case 'migrate': {
-      const db = await connect('ADMIN_DATABASE_URL');
-      await db.query(readFileSync(join(root, 'db/schema.sql'), 'utf8'));
-      console.log('Schema applied.');
-      await db.end();
-      break;
+      await migrate();
+      if (process.env.AUTH_DATABASE_URL) {
+        const { auth } = await import('../lib/auth.ts');
+        const { getMigrations } = await import('better-auth/db/migration');
+        const m = await getMigrations(auth.options);
+        const n = m.toBeCreated.length + m.toBeAdded.length + m.toBeAddedIndexes.length;
+        if (n) await m.runMigrations();
+        console.log(`  auth tables: ${n ? `${n} change(s) applied` : 'up to date'}`);
+        await (auth.options.database as { end(): Promise<void> }).end();
+      }
+      console.log('Migrated.');
+      process.exit(0);
     }
 
     case 'user:create': {

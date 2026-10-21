@@ -7,3 +7,6 @@ test/fixtures/*.csv
 
 # Personal knowledge files (real names, amounts)
 private/
+.next/
+next-env.d.ts
+*.tsbuildinfo

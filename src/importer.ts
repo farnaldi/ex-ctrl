@@ -73,6 +73,28 @@ export async function importFile(
   file: ParsedFile & { fingerprints: string[] },
   opts: { force?: boolean } = {},
 ): Promise<ImportResult> {
+  await db.query('begin');
+  try {
+    await db.query(`select set_config('app.user_id', $1, true)`, [userId]);
+    const result = await importStatement(db, file, opts);
+    await db.query(result.status === 'imported' ? 'commit' : 'rollback');
+    return result;
+  } catch (e) {
+    await db.query('rollback');
+    throw e;
+  }
+}
+
+/**
+ * Same as importFile, inside a transaction the caller already opened with app.user_id set
+ * (the web app and the MCP server, so the import is one audited operation).
+ * Writes nothing unless the status is 'imported'.
+ */
+export async function importStatement(
+  db: Db,
+  file: ParsedFile & { fingerprints: string[] },
+  opts: { force?: boolean } = {},
+): Promise<ImportResult> {
   const st = file.statement;
   const result: ImportResult = {
     file: file.fileName,
@@ -87,15 +109,9 @@ export async function importFile(
   };
   if (result.failedChecks.length && !opts.force) return { ...result, status: 'rejected' };
 
-  await db.query('begin');
-  try {
-    await db.query(`select set_config('app.user_id', $1, true)`, [userId]);
-
+  {
     const dup = await db.query(`select id from import_batches where file_hash = $1`, [file.fileHash]);
-    if (dup.rows.length) {
-      await db.query('rollback');
-      return { ...result, status: 'already_imported' };
-    }
+    if (dup.rows.length) return { ...result, status: 'already_imported' };
 
     // ---- account: matched by issuer + masked ref + kind, created on first sight
     const a = st.account;
@@ -211,10 +227,6 @@ export async function importFile(
 
     // payments to merchants with a recurring commitment (rent, gastos comunes...) get linked to it
     await db.query(`select link_commitments()`);
-    await db.query('commit');
     return result;
-  } catch (e) {
-    await db.query('rollback');
-    throw e;
   }
 }
