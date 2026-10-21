@@ -46,6 +46,14 @@ Postgres
 
 ## Local
 
+Everything in Docker (Postgres + the production build, same as Railway):
+
+```bash
+docker compose up --build        # http://localhost:3000 — sign up with an email in ALLOWED_EMAILS
+```
+
+Or with your own Postgres, for development:
+
 ```bash
 npm install                 # Node >= 20, Postgres >= 15
 cp .env.example .env        # fill in

@@ -1,0 +1,32 @@
+# Run everything locally (Postgres + app) to validate before publishing:
+#   docker compose up --build        -> http://localhost:3000
+# Local-only credentials below; never reuse them in production.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: finance
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finance"]
+      interval: 2s
+      retries: 30
+
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@db:5432/finance
+      DATABASE_URL: postgres://finance_app:local-app-password@db:5432/finance
+      AUTH_DATABASE_URL: postgres://finance_auth:local-auth-password@db:5432/finance
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: local-only-secret-do-not-use-in-production-0123456789
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-arnaldifrancisco@gmail.com}
+    command: sh -c "npm run migrate && npm start"
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:
