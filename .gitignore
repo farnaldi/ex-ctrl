@@ -1,0 +1,9 @@
+node_modules/
+.env
+# Real bank exports contain personal data: never commit them
+test/fixtures/*.xls
+test/fixtures/*.xlsx
+test/fixtures/*.csv
+
+# Personal knowledge files (real names, amounts)
+private/
