@@ -1,5 +1,6 @@
 'use server';
 import { revalidatePath } from 'next/cache';
+import { disconnectAgent } from '@/lib/auth';
 import { requireWebCtx } from '@/lib/session';
 import { createApiToken, revokeApiToken } from '@/src/core/tokens';
 
@@ -21,5 +22,11 @@ export async function createTokenAction(_: unknown, form: FormData) {
 export async function revokeTokenAction(form: FormData) {
   const { ctx } = await requireWebCtx();
   await revokeApiToken(ctx, Number(form.get('id')));
+  revalidatePath('/tokens');
+}
+
+export async function disconnectAgentAction(form: FormData) {
+  const { ctx } = await requireWebCtx();
+  await disconnectAgent(ctx.userId, String(form.get('id')));
   revalidatePath('/tokens');
 }

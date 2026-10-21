@@ -8,7 +8,8 @@
  */
 import { requireMcpAuth } from '@better-auth/mcp';
 import { createMcpHandler } from '@modelcontextprotocol/server';
-import { auth, mcpResource, oauthClientName, resolveUser } from '@/lib/auth';
+import { auth, hasConsent, mcpResource, oauthClientName, resolveUser } from '@/lib/auth';
+import { mcpOriginAllowed, mcpRateLimited } from '@/lib/security';
 import { isApiToken, verifyApiToken } from '@/src/core/tokens';
 import { buildMcpServer } from '@/src/mcp/server';
 
@@ -26,6 +27,9 @@ const viaOAuth = requireMcpAuth(
     // a token must act for a real user (never a client acting for itself)
     if (!claims.sub || !(await resolveUser(claims.sub))) return new Response('token does not belong to a user', { status: 403 });
     const clientId = String(claims.azp ?? claims.client_id ?? '');
+    // disconnected in the web app -> its still-valid access tokens stop working too
+    if (!(await hasConsent(claims.sub, clientId))) return new Response('agent was disconnected', { status: 401 });
+    if (mcpRateLimited(claims.sub)) return tooMany();
     return handler.fetch(request, {
       authInfo: {
         token: '',
@@ -40,12 +44,21 @@ const viaOAuth = requireMcpAuth(
   { resource: mcpResource },
 );
 
+const tooMany = () =>
+  Response.json({ jsonrpc: '2.0', error: { code: -32029, message: 'rate limit exceeded, retry in a minute' }, id: null }, {
+    status: 429,
+    headers: { 'retry-after': '60' },
+  });
+
 async function serve(request: Request): Promise<Response> {
+  if (!mcpOriginAllowed(request.headers.get('origin'), new URL(mcpResource).origin))
+    return Response.json({ jsonrpc: '2.0', error: { code: -32000, message: 'origin not allowed' }, id: null }, { status: 403 });
   const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(\S+)$/i)?.[1];
   if (bearer && isApiToken(bearer)) {
     const t = await verifyApiToken(bearer);
     if (!t || !(await resolveUser(t.user_id)))
       return Response.json({ jsonrpc: '2.0', error: { code: -32001, message: 'invalid, revoked or expired token' }, id: null }, { status: 401 });
+    if (mcpRateLimited(t.user_id)) return tooMany();
     return handler.fetch(request, {
       authInfo: {
         token: '',

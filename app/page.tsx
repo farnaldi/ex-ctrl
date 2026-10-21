@@ -18,7 +18,7 @@ export default async function Home() {
         </p>
         <code className="mt-3 block overflow-x-auto rounded-lg bg-bg px-3 py-2 text-sm">{mcpResource}</code>
         <p className="mt-4 text-sm text-muted">
-          ¿Un agente sin OAuth? <Link href="/tokens" className="text-accent underline-offset-4 hover:underline">Creá un token de acceso</Link>.
+          <Link href="/tokens" className="text-accent underline-offset-4 hover:underline">Agentes conectados y tokens de acceso</Link>.
         </p>
       </section>
     </main>

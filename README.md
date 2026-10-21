@@ -42,6 +42,9 @@ Postgres
 | `BETTER_AUTH_URL` | Public URL of the app, e.g. `https://finanzas.up.railway.app` |
 | `BETTER_AUTH_SECRET` | Long random string (`openssl rand -base64 32`) |
 | `ALLOWED_EMAILS` | Comma-separated emails allowed to sign up |
+| `TRUSTED_IP_HEADER` | Optional. Header with the real client IP, set by your edge (default `x-real-ip`, Railway). Used for rate limiting |
+| `MCP_RATE_LIMIT_PER_MINUTE` | Optional. MCP requests per user per minute (default 120) |
+| `MCP_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call `/api/mcp` besides the app itself (e.g. an MCP inspector) |
 | `TRUSTED_REDIRECT_DOMAINS` | Optional. Agent domains the consent screen shows without a warning (default `claude.ai,claude.com,chatgpt.com`) |
 
 ## Local
@@ -87,6 +90,10 @@ npx tsx src/cli.ts forecast --user <id> --month 2026-11
 - **Anything else** (own scripts, n8n, Agent SDK): create a token at `/tokens` (optionally read-only, with expiry)
   and send `Authorization: Bearer fin_…` to the same endpoint. Read-only tokens only get the read tools.
   Tokens are stored hashed, shown once, and can be revoked.
+
+## Security
+
+See `SECURITY.md` for the threat model, what is tested, and the publish checklist.
 
 ## Supported exports
 

@@ -8,10 +8,12 @@ import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { mcp } from '@better-auth/mcp';
 import { APIError, betterAuth } from 'better-auth';
+import { createAuthMiddleware, isAPIError } from 'better-auth/api';
 import { nextCookies } from 'better-auth/next-js';
 import { jwt } from 'better-auth/plugins';
 import pg from 'pg';
 import { pool } from '../src/core/db.ts';
+import { recordSignIn, signInLocked } from './security.ts';
 
 const isProd = process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE !== 'phase-production-build';
 // Fail at startup rather than run with a default secret or a wrong public URL (OAuth issuer and redirects depend on it)
@@ -49,7 +51,36 @@ export const auth = betterAuth({
   baseURL,
   database: authPool,
   emailAndPassword: { enabled: true, minPasswordLength: 12 },
-  advanced: { database: { generateId: 'uuid' } },
+  advanced: {
+    database: { generateId: 'uuid' },
+    useSecureCookies: baseURL.startsWith('https://'),
+    // Client IP for rate limiting: only a header set by our own edge. Railway sets X-Real-IP; X-Forwarded-For
+    // can be prepended by the client, which let anyone dodge the limit by sending a different value each time.
+    ipAddress: { ipAddressHeaders: [(process.env.TRUSTED_IP_HEADER ?? 'x-real-ip').toLowerCase()] },
+  },
+  rateLimit: {
+    enabled: process.env.NODE_ENV === 'production' || process.env.RATE_LIMIT === 'on',
+    storage: 'database', // survives restarts and deploys
+    window: 60,
+    max: 100,
+    customRules: {
+      '/sign-in/email': { window: 60, max: 5 },
+      '/sign-up/email': { window: 3600, max: 5 },
+      '/oauth2/register': { window: 3600, max: 20 },
+      '/oauth2/token': { window: 60, max: 30 },
+    },
+  },
+  hooks: {
+    // per-account lockout: 10 failed sign-ins in 15 minutes lock that email for the rest of the window
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === '/sign-in/email' && typeof ctx.body?.email === 'string' && signInLocked(ctx.body.email))
+        throw new APIError('TOO_MANY_REQUESTS', { message: 'Too many failed attempts. Try again in 15 minutes.' });
+    }),
+    after: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === '/sign-in/email' && typeof ctx.body?.email === 'string')
+        recordSignIn(ctx.body.email, !isAPIError(ctx.context.returned));
+    }),
+  },
   databaseHooks: {
     user: {
       create: {
@@ -78,6 +109,9 @@ export const auth = betterAuth({
       allowUnauthenticatedClientRegistration: true,
       // Only user-delegated tokens: no client_credentials (machine tokens with no user behind them)
       grantTypes: ['authorization_code', 'refresh_token'],
+      // Short-lived access tokens: a disconnected or leaked one stops working soon (clients refresh silently)
+      accessTokenExpiresIn: 15 * 60,
+      refreshTokenExpiresIn: 30 * 24 * 3600,
     }),
     cimd({ fetchClientMetadataResource, metadataProfile: 'mcp-2026-07-28' }),
     nextCookies(),
@@ -118,15 +152,50 @@ const known = new Map<string, number>(); // user id -> checked at (ms)
 
 /**
  * The user an MCP token or a session belongs to: must exist in auth (a token whose subject is not a real
- * user is rejected), and gets its finance row ensured. Checked once every 5 minutes per user and process.
+ * user is rejected), and gets its finance row ensured. Checked once a minute per user and process.
  */
 export async function resolveUser(userId: string): Promise<boolean> {
   const at = known.get(userId);
-  if (at && Date.now() - at < 5 * 60_000) return true;
+  if (at && Date.now() - at < 60_000) return true;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return false;
   const r = await authPool.query<{ email: string; name: string | null }>(`select email, name from "user" where id = $1`, [userId]);
   if (!r.rows.length) return false;
   await ensureFinanceUser(userId, r.rows[0].email, r.rows[0].name || null);
   known.set(userId, Date.now());
+  return true;
+}
+
+// ---- connected agents (OAuth): list and disconnect
+
+export async function listConnectedAgents(userId: string) {
+  const r = await authPool.query<{ id: string; client_id: string; name: string | null; uri: string | null; created_at: Date; last_used: Date | null }>(
+    `select c.id, c."clientId" as client_id, o.name, o.uri, c."createdAt" as created_at,
+            (select max(t."createdAt") from "oauthRefreshToken" t where t."userId" = c."userId" and t."clientId" = c."clientId") as last_used
+     from "oauthConsent" c left join "oauthClient" o on o."clientId" = c."clientId"
+     where c."userId" = $1 order by c."createdAt" desc`,
+    [userId],
+  );
+  return r.rows;
+}
+
+/** Removes the consent and revokes its refresh tokens; /api/mcp stops accepting its access tokens within a minute. */
+export async function disconnectAgent(userId: string, consentId: string) {
+  const c = await authPool.query<{ clientId: string }>(`delete from "oauthConsent" where id = $1 and "userId" = $2 returning "clientId"`, [consentId, userId]);
+  if (!c.rows.length) return false;
+  await authPool.query(`update "oauthRefreshToken" set revoked = now() where "userId" = $1 and "clientId" = $2 and revoked is null`, [userId, c.rows[0].clientId]);
+  consentCache.delete(`${userId}|${c.rows[0].clientId}`);
+  return true;
+}
+
+const consentCache = new Map<string, number>();
+
+/** The user still allows this client (checked at most once a minute). */
+export async function hasConsent(userId: string, clientId: string): Promise<boolean> {
+  const key = `${userId}|${clientId}`;
+  const at = consentCache.get(key);
+  if (at && Date.now() - at < 60_000) return true;
+  const r = await authPool.query(`select 1 from "oauthConsent" where "userId" = $1 and "clientId" = $2`, [userId, clientId]);
+  if (!r.rows.length) return false;
+  consentCache.set(key, Date.now());
   return true;
 }
