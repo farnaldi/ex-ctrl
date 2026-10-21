@@ -1,12 +1,12 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { auth, mcpResource } from '@/lib/auth';
+import { auth, mcpResource, resolveUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Home() {
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/login');
+  if (!session || !(await resolveUser(session.user.id))) redirect('/login');
   return (
     <main className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-2xl font-semibold tracking-tight">Finanzas</h1>

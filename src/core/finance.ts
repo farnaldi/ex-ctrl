@@ -66,8 +66,9 @@ export async function listTransactions(ctx: Ctx, f: S.TransactionFilter) {
     amount_desc: 't.amount desc, t.id',
     amount_asc: 't.amount, t.id',
   }[f.sort ?? 'date_desc'];
-  const limit = f.limit ?? 100;
-  const offset = f.offset ?? 0;
+  // interpolated into the SQL below: always integers in range, whatever the caller sent
+  const limit = Math.min(Math.max(Math.trunc(Number(f.limit ?? 100)) || 100, 1), 500);
+  const offset = Math.max(Math.trunc(Number(f.offset ?? 0)) || 0, 0);
 
   const from = `from transactions t
     join accounts a on a.id = t.account_id
@@ -377,7 +378,7 @@ export async function listOperations(ctx: Ctx, opts: { limit?: number; actor?: '
     (
       await db.query(
         `select * from v_operations where $1::text is null or actor = $1 order by at desc limit $2`,
-        [opts.actor ?? null, opts.limit ?? 50],
+        [opts.actor ?? null, Math.min(Math.max(Math.trunc(Number(opts.limit ?? 50)) || 50, 1), 200)],
       )
     ).rows,
   );

@@ -19,11 +19,11 @@ const A = { userId: userA, actor: 'user' as const, source: 'web' as const };
 const agentA = { userId: userA, actor: 'claude' as const, source: 'mcp' as const };
 const B = { userId: userB, actor: 'user' as const, source: 'web' as const };
 
-function itauStatement(): Buffer {
+function itauStatement(account = '1234567'): Buffer {
   const grid: (string | number)[][] = [
     [], [], [],
     ['', 'Nombre', '', '', 'Tipo de cuenta', 'Moneda', 'Nro de cuenta'],
-    ['', 'PEREZ JUAN', '', '', 'Caja de Ahorro', 'Pesos', '1234567'],
+    ['', 'PEREZ JUAN', '', '', 'Caja de Ahorro', 'Pesos', account],
     [],
     ['', 'Fecha', 'Concepto', '', 'Débito', 'Crédito', 'Saldo', 'Referencia', 'Destino'],
     ['', '30/01/2026', 'SALDO ANTERIOR', '', '', '', 10000],
@@ -163,6 +163,24 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.ok(f.lines.some((l: { component: string }) => l.component === 'commitment'));
     const q = await F.reviewQueue(A);
     assert.ok(Array.isArray(q.transactions));
+  });
+
+  test('undo of an import is blocked while later work references its rows', async () => {
+    const imp = await F.importExport(A, 'itau-other.xls', itauStatement('7654321'));
+    assert.equal(imp.status, 'imported');
+    const t = (await F.listTransactions(A, { text: 'RETIRO', sort: 'date_desc' })).transactions.find((x: { account: string }) => x.account.includes('4321'));
+    const tagged = await F.tagTransactions(A, { transaction_ids: [t.id], add: ['efectivo'] });
+    await assert.rejects(F.undo(A, imp.op_id), /still has 1 row\(s\) in transaction_tags/);
+    await F.undo(A, tagged.op_id);
+    const u = await F.undo(A, imp.op_id);
+    assert.ok(u.rows_reverted > 0);
+    assert.equal((await F.listTransactions(A, { text: 'RETIRO' })).count, 1);
+  });
+
+  test('limit and offset are clamped', async () => {
+    const r = await F.listTransactions(A, { limit: '5; drop table users' as unknown as number, offset: -3 });
+    assert.equal(r.limit, 100);
+    assert.equal(r.offset, 0);
   });
 
   test('MCP server: tools listed and callable as the agent', async () => {

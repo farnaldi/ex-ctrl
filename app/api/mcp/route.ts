@@ -5,7 +5,7 @@
  */
 import { requireMcpAuth } from '@better-auth/mcp';
 import { createMcpHandler } from '@modelcontextprotocol/server';
-import { auth, mcpResource } from '@/lib/auth';
+import { auth, mcpResource, resolveUser } from '@/lib/auth';
 import { buildMcpServer } from '@/src/mcp/server';
 
 export const dynamic = 'force-dynamic';
@@ -18,8 +18,9 @@ const handler = createMcpHandler(({ authInfo }) => {
 
 const protectedHandler = requireMcpAuth(
   auth,
-  (request, claims) => {
-    if (!claims.sub) return new Response('token has no subject', { status: 401 });
+  async (request, claims) => {
+    // a token must act for a real user (never a client acting for itself)
+    if (!claims.sub || !(await resolveUser(claims.sub))) return new Response('token does not belong to a user', { status: 403 });
     return handler.fetch(request, {
       authInfo: {
         token: '',
