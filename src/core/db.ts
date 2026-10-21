@@ -18,8 +18,11 @@ export type Source = 'web' | 'mcp' | 'cli';
 
 export interface Ctx {
   userId: string;
+  /** 'user' = a person in the web app; 'claude' = any agent (Claude or another MCP client / API token) */
   actor: Actor;
   source: Source;
+  /** Which agent: the OAuth client's name or the API token's name (shown in the history) */
+  agent?: string;
 }
 
 export type Tx = pg.PoolClient;
@@ -45,8 +48,8 @@ async function run<T>(ctx: Ctx, operation: string | null, readOnly: boolean, fn:
     await db.query(readOnly ? 'begin read only' : 'begin');
     await db.query(
       `select set_config('app.user_id', $1, true), set_config('app.actor', $2, true), set_config('app.source', $3, true),
-              set_config('app.op_id', $4, true), set_config('app.op', $5, true)`,
-      [ctx.userId, readOnly ? '' : ctx.actor, ctx.source, readOnly ? '' : randomUUID(), operation ?? ''],
+              set_config('app.op_id', $4, true), set_config('app.op', $5, true), set_config('app.agent', $6, true)`,
+      [ctx.userId, readOnly ? '' : ctx.actor, ctx.source, readOnly ? '' : randomUUID(), operation ?? '', ctx.agent ?? ''],
     );
     const result = await fn(db);
     await db.query('commit');

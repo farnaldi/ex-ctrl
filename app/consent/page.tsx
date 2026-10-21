@@ -1,13 +1,13 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { verifyOAuthQueryParams } from '@better-auth/oauth-provider';
-import { auth } from '@/lib/auth';
+import { auth, trustedRedirectDomains } from '@/lib/auth';
 import { ConsentForm } from './consent-form';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * OAuth consent for an MCP client (e.g. Claude). Client registration is open (MCP clients register
+ * OAuth consent for an MCP client (Claude, ChatGPT or any other agent). Client registration is open (MCP clients register
  * themselves), so this page is the real gate: it shows who is asking and, above all, where the
  * authorization will be sent. Anything registered by a third party shows up here with its own domain.
  */
@@ -36,7 +36,7 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
   } catch {
     redirectHost = null;
   }
-  const knownClaude = redirectHost === 'claude.ai' || redirectHost?.endsWith('.claude.ai') || redirectHost === 'claude.com';
+  const trusted = !!redirectHost && trustedRedirectDomains().some((d) => redirectHost === d || redirectHost!.endsWith(`.${d}`));
   const scopes = (q.scope ?? '').split(' ').filter(Boolean);
 
   if (!client || !signed || !redirectHost) {
@@ -56,9 +56,9 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
         <p className="mt-1 text-sm">
           Te va a devolver a <span className="font-mono font-semibold">{redirectHost}</span>
         </p>
-        {!knownClaude && (
+        {!trusted && (
           <p className="mt-2 text-sm text-danger">
-            Este dominio no es de Claude. Permití solo si reconocés esta aplicación.
+            Este dominio no está en tu lista de agentes de confianza. Permití solo si reconocés esta aplicación.
           </p>
         )}
       </div>

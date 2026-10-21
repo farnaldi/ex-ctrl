@@ -1,7 +1,8 @@
 # finance
 
 Expense tracking and forecasting: import bank exports, learn categories/tags/commitments, forecast per currency (UYU, USD).
-A web app to see and edit everything, and an MCP server so an agent (Claude) can load, edit and query the same data.
+A web app to see and edit everything, and an MCP server so any agent (Claude, ChatGPT or any other MCP client) can
+load, edit and query the same data.
 Multi-user from the start; isolation is enforced by Postgres row-level security.
 
 ## Architecture
@@ -9,9 +10,10 @@ Multi-user from the start; isolation is enforced by Postgres row-level security.
 ```
 Next.js app (one service)
 ├── /login, /consent, /           web UI (sign-in with Better Auth)
+├── /tokens                       personal access tokens for agents without MCP OAuth
 ├── /api/auth/*                   Better Auth: sessions + OAuth 2.1 server for MCP clients
 ├── /.well-known/*                OAuth discovery (rewritten to /api/well-known/*)
-└── /api/mcp                      MCP server (Streamable HTTP), bearer token from our own OAuth server
+└── /api/mcp                      MCP server (Streamable HTTP): OAuth bearer token from our own server, or fin_… token
         │
         ▼
 src/core/finance.ts               domain layer: every read/write, shared by web and MCP
@@ -23,7 +25,8 @@ Postgres
 └── auth     Better Auth tables                        role from AUTH_DATABASE_URL (no access to public data)
 ```
 
-- **Who decided**: writes from the MCP agent are recorded as `claude`, from the web as `user` (categorized_by, source, tagged_by...).
+- **Who decided**: writes from an agent are recorded as `claude` (= any agent), from the web as `user`
+  (categorized_by, source, tagged_by...). The history also stores which agent: the OAuth client's name or the token's name.
 - **Audit + undo**: every web/MCP write is one operation in `audit_log` (before/after per row). `undo_operation(op_id)`
   reverts it, and refuses if a later operation changed the same rows. History can't be deleted by the app role.
 - **Auth tables** use uuid ids equal to `public.users.id`; a new sign-up creates its `users` row. Sign-up is limited
@@ -39,6 +42,7 @@ Postgres
 | `BETTER_AUTH_URL` | Public URL of the app, e.g. `https://finanzas.up.railway.app` |
 | `BETTER_AUTH_SECRET` | Long random string (`openssl rand -base64 32`) |
 | `ALLOWED_EMAILS` | Comma-separated emails allowed to sign up |
+| `TRUSTED_REDIRECT_DOMAINS` | Optional. Agent domains the consent screen shows without a warning (default `claude.ai,claude.com,chatgpt.com`) |
 
 ## Local
 
@@ -65,7 +69,16 @@ npx tsx src/cli.ts forecast --user <id> --month 2026-11
 2. Service variables: the table above. `preDeployCommand` runs `npm run migrate` on every deploy.
 3. Generate a domain; set `BETTER_AUTH_URL` to it. Health check: `/api/health`.
 4. Open the app, create your account (email must be in `ALLOWED_EMAILS`).
-5. In Claude: Settings → Connectors → Add custom connector → `https://<domain>/api/mcp`. Sign in and allow.
+5. Connect an agent (next section).
+
+## Connecting agents
+
+- **MCP clients with OAuth** (Claude custom connectors, ChatGPT connectors, other clients that support remote MCP
+  with authorization): add a remote MCP server with `https://<domain>/api/mcp`, sign in, check the app name and
+  return domain on the consent screen, allow. Domains not in `TRUSTED_REDIRECT_DOMAINS` are shown in red.
+- **Anything else** (own scripts, n8n, Agent SDK): create a token at `/tokens` (optionally read-only, with expiry)
+  and send `Authorization: Bearer fin_…` to the same endpoint. Read-only tokens only get the read tools.
+  Tokens are stored hashed, shown once, and can be revoked.
 
 ## Supported exports
 

@@ -1,22 +1,25 @@
-import { headers } from 'next/headers';
-import { redirect } from 'next/navigation';
-import { auth, mcpResource, resolveUser } from '@/lib/auth';
+import Link from 'next/link';
+import { mcpResource } from '@/lib/auth';
+import { requireWebCtx } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Home() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session || !(await resolveUser(session.user.id))) redirect('/login');
+  const { email } = await requireWebCtx();
   return (
     <main className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-2xl font-semibold tracking-tight">Finanzas</h1>
-      <p className="mt-1 text-sm text-muted">{session.user.email}</p>
+      <p className="mt-1 text-sm text-muted">{email}</p>
       <section className="mt-8 rounded-xl border border-line bg-surface p-5">
-        <h2 className="font-medium">Conectar Claude</h2>
+        <h2 className="font-medium">Conectar un agente</h2>
         <p className="mt-1 text-sm text-muted">
-          En Claude: Configuración → Conectores → Agregar conector personalizado, con esta URL:
+          Cualquier cliente MCP con OAuth (Claude, ChatGPT, otros): agregá un conector MCP remoto con esta URL, iniciá sesión y
+          aceptá.
         </p>
         <code className="mt-3 block overflow-x-auto rounded-lg bg-bg px-3 py-2 text-sm">{mcpResource}</code>
+        <p className="mt-4 text-sm text-muted">
+          ¿Un agente sin OAuth? <Link href="/tokens" className="text-accent underline-offset-4 hover:underline">Creá un token de acceso</Link>.
+        </p>
       </section>
     </main>
   );

@@ -177,6 +177,35 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.equal((await F.listTransactions(A, { text: 'RETIRO' })).count, 1);
   });
 
+  test('API tokens: resolve to their user, read-only hides writes, agent name in history, revocable', async () => {
+    const T = await import('../src/core/tokens.ts');
+    const { buildMcpServer } = await import('../src/mcp/server.ts');
+    const t = await T.createApiToken(A, { name: 'n8n' });
+    const ro = await T.createApiToken(A, { name: 'reportes', readOnly: true });
+    assert.match(t.token, /^fin_[A-Za-z0-9]{8}_/);
+    assert.ok(T.isApiToken(t.token));
+
+    const v = await T.verifyApiToken(t.token);
+    assert.equal(v?.user_id, userA);
+    assert.equal(v?.read_only, false);
+    assert.equal((await T.verifyApiToken(ro.token))?.read_only, true);
+    assert.equal(await T.verifyApiToken(t.token.slice(0, -1) + (t.token.endsWith('a') ? 'b' : 'a')), null);
+    assert.equal((await T.listApiTokens(B)).length, 0); // B can't see A's tokens
+
+    const tools = (s: ReturnType<typeof buildMcpServer>) =>
+      Object.keys((s as unknown as { _registeredTools: Record<string, unknown> })._registeredTools);
+    const agentCtx = { userId: userA, actor: 'claude' as const, source: 'mcp' as const, agent: 'token: n8n' };
+    assert.ok(tools(buildMcpServer(agentCtx)).includes('learn_rule'));
+    const roTools = tools(buildMcpServer(agentCtx, { readOnly: true }));
+    assert.ok(roTools.includes('search_transactions') && !roTools.includes('learn_rule') && !roTools.includes('undo_operation'));
+
+    await F.editTag(agentCtx, { name: 'via-token' });
+    assert.equal((await F.listOperations(A))[0].agent, 'token: n8n');
+
+    await T.revokeApiToken(A, (await T.listApiTokens(A)).find((x) => x.name === 'n8n')!.id);
+    assert.equal(await T.verifyApiToken(t.token), null);
+  });
+
   test('limit and offset are clamped', async () => {
     const r = await F.listTransactions(A, { limit: '5; drop table users' as unknown as number, offset: -3 });
     assert.equal(r.limit, 100);

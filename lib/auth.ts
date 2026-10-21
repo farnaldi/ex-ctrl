@@ -24,6 +24,16 @@ if (isProd) {
 const baseURL = (process.env.BETTER_AUTH_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 export const mcpResource = `${baseURL}/api/mcp`;
 
+/**
+ * Domains MCP clients may redirect to without a warning on the consent screen (comma-separated; subdomains
+ * included). Any other domain still works, but the user sees in red that it is not on the list.
+ */
+export const trustedRedirectDomains = () =>
+  (process.env.TRUSTED_REDIRECT_DOMAINS ?? 'claude.ai,claude.com,chatgpt.com')
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+
 /** Comma-separated emails allowed to create an account. Empty = nobody new (existing users still sign in). */
 const allowedEmails = () =>
   (process.env.ALLOWED_EMAILS ?? '')
@@ -90,6 +100,18 @@ async function ensureFinanceUser(id: string, email: string, name: string | null)
   } finally {
     db.release();
   }
+}
+
+const clientNames = new Map<string, string | null>();
+
+/** Name the MCP client registered with (shown in the change history as the agent). */
+export async function oauthClientName(clientId: string): Promise<string | null> {
+  if (!clientId) return null;
+  if (clientNames.has(clientId)) return clientNames.get(clientId)!;
+  const r = await authPool.query<{ name: string | null }>(`select name from "oauthClient" where "clientId" = $1`, [clientId]);
+  const name = r.rows[0]?.name ?? null;
+  clientNames.set(clientId, name);
+  return name;
 }
 
 const known = new Map<string, number>(); // user id -> checked at (ms)

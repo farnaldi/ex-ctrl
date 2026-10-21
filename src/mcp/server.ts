@@ -35,8 +35,9 @@ const READ = { readOnlyHint: true, destructiveHint: false, openWorldHint: false 
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false } as const;
 
-export function buildMcpServer(ctx: Ctx): McpServer {
-  const server = new McpServer({ name: 'finanzas', version: '0.2.0' }, { instructions: INSTRUCTIONS });
+export function buildMcpServer(ctx: Ctx, opts: { readOnly?: boolean } = {}): McpServer {
+  const instructions = opts.readOnly ? `${INSTRUCTIONS}\n- This connection is read-only: no write tools are available.` : INSTRUCTIONS;
+  const server = new McpServer({ name: 'finanzas', version: '0.3.0' }, { instructions });
 
   // Small helper: register a tool whose handler returns JSON, with uniform error handling.
   function tool<T extends z.ZodType>(
@@ -46,6 +47,7 @@ export function buildMcpServer(ctx: Ctx): McpServer {
     annotations: typeof READ | typeof WRITE | typeof DESTRUCTIVE,
     run: (args: z.infer<T>) => Promise<unknown>,
   ) {
+    if (opts.readOnly && annotations !== READ) return;
     server.registerTool(name, { description, inputSchema: input as never, annotations }, (async (args: z.infer<T>) => {
       try {
         return result((await run(args)) as Json);
