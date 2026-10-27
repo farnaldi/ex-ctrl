@@ -69,7 +69,7 @@ async function tokens(f, clientId) {
     const r = await f('/api/auth/oauth2/consent', { method: 'POST', headers: json, body: JSON.stringify({ accept: true, oauth_query: new URL(url, B).search.slice(1) }) });
     url = (await r.json()).url;
   }
-  const code = new URL(url).searchParams.get('code');
+  const code = new URL(url, B).searchParams.get('code');
   const r = await fetch(`${B}/api/auth/oauth2/token`, form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: v, resource: RES }));
   return r.json();
 }
@@ -121,6 +121,10 @@ check('sign in with probe account', login.status === 200, String(login.status));
 const setCookie = login.headers.getSetCookie?.().join(';') ?? '';
 check('session cookie HttpOnly + SameSite', /HttpOnly/i.test(setCookie) && /SameSite/i.test(setCookie), '');
 if (!LOCAL) check('session cookie Secure', /Secure/i.test(setCookie), '');
+if (login.status !== 200) {
+  console.log('\nSign-in failed: check PROBE_EMAIL / PROBE_PASSWORD (or wait 15 min if the account is locked). The OAuth checks need a session.');
+  process.exit(1);
+}
 
 const client = await register();
 check('dynamic client registration (needed by MCP clients)', client.status === 201, String(client.status));

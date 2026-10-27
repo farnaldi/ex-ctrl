@@ -9,9 +9,9 @@ const securityHeaders = [
   { key: 'Referrer-Policy', value: 'no-referrer' },
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-  ...(process.env.BETTER_AUTH_URL?.startsWith('https://')
-    ? [{ key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' }]
-    : []),
+  // Always sent: headers() is evaluated at build time (env vars like BETTER_AUTH_URL aren't there), and browsers
+  // ignore HSTS on plain-http responses (RFC 6797 §8.1), so local http is unaffected.
+  { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
 ];
 
 const config: NextConfig = {
