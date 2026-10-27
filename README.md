@@ -82,6 +82,21 @@ npx tsx src/cli.ts forecast --user <id> --month 2026-11
 4. Open the app, create your account (email must be in `ALLOWED_EMAILS`).
 5. Connect an agent (next section).
 
+Without Railway's GitHub app (its GitHub login was down after the Oct 2026 incident) the service can deploy the image
+that `.github/workflows/image.yml` publishes on every push to `main`: `ghcr.io/<owner>/ex-ctrl:<full commit sha>`.
+`railway.json` isn't read for an image service, so set the pre-deploy command (`npm run migrate`), the health check
+path and the restart policy on the service itself.
+
+## Web app (read-only)
+
+Signed-in pages, all scoped to the user by row-level security: **Resumen** (spending per month against the forecast range,
+top categories, what's pending), **Movimientos** (filters by period, currency, account, category, tag, text, pending,
+one-off; detail with its change history), **Categorías** and **Tags** (category/tag × month tables, drill down to the
+rows), **Compromisos** (fixed expenses, card installment plans, loans with balance, missed payments), **Pronóstico**
+(next months by component and tag, plus forecast vs actual: each past month forecast only from the months before it),
+**Historial** (every web/agent operation with before/after). UYU and USD are always shown separately. Editing comes in
+phase 4; until then answers go through the agent.
+
 ## Connecting agents
 
 - **MCP clients with OAuth** (Claude custom connectors, ChatGPT connectors, other clients that support remote MCP

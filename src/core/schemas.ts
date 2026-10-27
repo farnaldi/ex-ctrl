@@ -31,6 +31,7 @@ export const TransactionFilter = z.object({
   spending_only: z.boolean().optional().describe('Only rows that count as spending (no transfers, fx, income, savings or excluded)'),
   uncategorized: z.boolean().optional().describe('Only spending rows with no category'),
   needs_review: z.boolean().optional().describe('Only rows flagged by the importer and not answered yet'),
+  pending: z.boolean().optional().describe('Rows waiting for an answer: flagged by the importer or spending with no category'),
   one_off: z.boolean().optional().describe('Only rows marked one-off (true) or only regular rows (false)'),
   min_amount: z.number().optional(),
   max_amount: z.number().optional(),

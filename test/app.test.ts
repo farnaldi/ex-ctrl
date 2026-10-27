@@ -163,6 +163,14 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.ok(f.lines.some((l: { component: string }) => l.component === 'commitment'));
     const q = await F.reviewQueue(A);
     assert.ok(Array.isArray(q.transactions));
+    // the "pending" filter lists exactly what the review queue lists
+    assert.equal((await F.listTransactions(A, { pending: true, limit: 500 })).count, q.transactions.length);
+    // forecast vs actual: one row per month and currency, the forecast equals forecast() for that month
+    const fva = await F.forecastVsActual(A, { from: '2026-02', to: '2026-03' });
+    const marUYU = fva.find((r: { month: string; currency: string }) => r.month === '2026-03' && r.currency === 'UYU');
+    assert.ok(marUYU);
+    assert.equal(Number(marUYU.expected), Number(f.totals.find((t: { currency: string }) => t.currency === 'UYU')?.expected));
+    assert.deepEqual(await F.dataRange(B), { first: null, last: null });
   });
 
   test('undo of an import is blocked while later work references its rows', async () => {

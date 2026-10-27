@@ -56,6 +56,7 @@ export async function listTransactions(ctx: Ctx, f: S.TransactionFilter) {
   if (f.spending_only) w.add(IS_SPENDING);
   if (f.uncategorized) w.add(`t.category_id is null and t.kind in ${SPEND_KINDS}`);
   if (f.needs_review) w.add(`t.review_reason is not null`);
+  if (f.pending) w.add(`(t.review_reason is not null or (t.category_id is null and t.kind in ${SPEND_KINDS}))`);
   if (f.one_off === true) w.add(IS_ONE_OFF);
   if (f.one_off === false) w.add(`not ${IS_ONE_OFF}`);
   if (f.min_amount !== undefined) w.add(`t.amount >= ?`, f.min_amount);
@@ -306,6 +307,43 @@ export async function forecastAccuracy(ctx: Ctx) {
     (await db.query(`select to_char(month, 'YYYY-MM') as month, currency, low, expected, high, actual, actual_one_off,
                             diff_excl_one_off, diff_excl_one_off_pct, within_range
                      from v_forecast_accuracy order by month, currency desc`)).rows,
+  );
+}
+
+/**
+ * Forecast vs actual for a range of months, computed now (not from snapshots): the forecast of a past month only uses
+ * the months before it (f_baseline anchors at that month), so this is an honest backtest.
+ */
+export async function forecastVsActual(ctx: Ctx, opts: { from: string; to: string; lookback?: number }) {
+  return read(ctx, async (db) =>
+    (
+      await db.query(
+        `select to_char(g.m, 'YYYY-MM') as month, f.currency, f.committed, f.variable, f.events, f.low, f.expected, f.high,
+                a.actual, a.one_off
+         from generate_series($1::date, $2::date, interval '1 month') as g(m)
+         cross join lateral f_forecast_totals(g.m::date, $3) f
+         left join lateral (
+           select sum(t.amount) as actual,
+                  coalesce(sum(t.amount) filter (where exists (select 1 from context_notes n
+                                                               where n.kind = 'one_off' and n.transaction_id = t.id)), 0) as one_off
+           from v_spend_tx t where t.period_month = g.m::date and t.currency = f.currency
+         ) a on true
+         order by g.m, f.currency desc`,
+        [monthStart(opts.from), monthStart(opts.to), opts.lookback ?? 3],
+      )
+    ).rows,
+  );
+}
+
+/** First and last month with imported data. */
+export async function dataRange(ctx: Ctx) {
+  return read(ctx, async (db) =>
+    (
+      await db.query<{ first: string | null; last: string | null }>(
+        `select to_char(min(period_month), 'YYYY-MM') as first, to_char(max(period_month), 'YYYY-MM') as last
+         from transactions where import_batch_id is not null`,
+      )
+    ).rows[0],
   );
 }
 

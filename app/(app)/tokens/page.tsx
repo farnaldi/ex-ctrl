@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { listConnectedAgents, mcpResource } from '@/lib/auth';
 import { requireWebCtx } from '@/lib/session';
 import { listApiTokens } from '@/src/core/tokens';
@@ -15,9 +14,8 @@ export default async function TokensPage() {
   const now = Date.now();
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <Link href="/" className="text-sm text-muted hover:underline">← Finanzas</Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Acceso de agentes</h1>
+    <main className="max-w-3xl">
+      <h1 className="text-2xl font-semibold tracking-tight">Acceso de agentes</h1>
 
       <h2 className="mt-8 font-medium">Agentes conectados</h2>
       <p className="mt-1 text-sm text-muted">Los que autorizaste con OAuth (Claude, ChatGPT…). Desconectar corta su acceso en menos de un minuto.</p>
