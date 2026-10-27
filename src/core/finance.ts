@@ -705,6 +705,60 @@ export async function editTag(ctx: Ctx, i: z.infer<typeof S.TagEdit>) {
   );
 }
 
+/**
+ * Merchant tags: every row of the merchant carries them. Removing one also removes it from the merchant's rows where it came
+ * from the merchant (tagged_by = 'merchant'); tags a person, a rule or a commitment put on a row stay.
+ */
+export async function editMerchant(ctx: Ctx, i: z.infer<typeof S.MerchantEdit>) {
+  const apply = i.apply_to_transactions ?? true;
+  const label = [i.add_tags?.length ? `+${i.add_tags.join(',')}` : '', i.remove_tags?.length ? `-${i.remove_tags.join(',')}` : ''].filter(Boolean).join(' ');
+  return ok(
+    await write(ctx, `merchant ${i.name} ${label}`.trim(), async (db) => {
+      const m = (await db.query<{ id: number; name: string }>(`select id, name from merchants where lower(name) = lower($1)`, [i.name])).rows[0];
+      if (!m) throw new Error(`merchant "${i.name}" not found`);
+      let rowsTagged = 0;
+      let rowsUntagged = 0;
+      if (i.add_tags?.length) {
+        await db.query(
+          `insert into merchant_tags (merchant_id, tag_id) select $1, f_tag_id(g) from unnest($2::text[]) g on conflict do nothing`,
+          [m.id, i.add_tags],
+        );
+        if (apply)
+          rowsTagged = (
+            await db.query(
+              `insert into transaction_tags (transaction_id, tag_id, tagged_by)
+               select t.id, f_tag_id(g), 'merchant' from transactions t, unnest($2::text[]) g where t.merchant_id = $1
+               on conflict do nothing returning 1`,
+              [m.id, i.add_tags],
+            )
+          ).rows.length;
+      }
+      if (i.remove_tags?.length) {
+        await db.query(
+          `delete from merchant_tags mt using tags g where g.id = mt.tag_id and mt.merchant_id = $1 and g.name = any($2::text[])`,
+          [m.id, i.remove_tags],
+        );
+        if (apply)
+          rowsUntagged = (
+            await db.query(
+              `delete from transaction_tags tt using tags g, transactions t
+               where g.id = tt.tag_id and t.id = tt.transaction_id and t.merchant_id = $1 and tt.tagged_by = 'merchant'
+                 and g.name = any($2::text[]) returning 1`,
+              [m.id, i.remove_tags],
+            )
+          ).rows.length;
+      }
+      const tags = (
+        await db.query<{ name: string }>(
+          `select g.name from merchant_tags mt join tags g on g.id = mt.tag_id where mt.merchant_id = $1 order by g.name`,
+          [m.id],
+        )
+      ).rows.map((r) => r.name);
+      return { merchant: m.name, tags, rows_tagged: rowsTagged, rows_untagged: rowsUntagged };
+    }),
+  );
+}
+
 export async function editCategory(ctx: Ctx, i: z.infer<typeof S.CategoryEdit>) {
   return ok(
     await write(ctx, `category ${i.name}`, async (db) => {

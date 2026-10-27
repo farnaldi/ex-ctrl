@@ -129,6 +129,24 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.equal((await F.listTransactions(A, { category: 'Panadería' })).count, 2);
   });
 
+  test('merchant tags: removing one untags the merchant rows (not tags a person added); undoable', async () => {
+    // after the previous test, the 2 bakery rows carry #casa from the merchant "Panaderías"
+    const rows = (await F.listTransactions(A, { category: 'Panadería' })).transactions;
+    await F.tagTransactions(A, { transaction_ids: [rows[0].id], add: ['casa'] }); // already tagged: stays tagged_by merchant
+    await F.tagTransactions(A, { transaction_ids: [rows[1].id], add: ['manual'] });
+    const r = await F.editMerchant(A, { name: 'panaderías', remove_tags: ['casa'] });
+    assert.equal(r.rows_untagged, 2);
+    assert.deepEqual(r.tags, []);
+    assert.equal((await F.listTransactions(A, { tag: 'casa' })).count, 0);
+    assert.equal((await F.listTransactions(A, { tag: 'manual' })).count, 1);
+    await F.undo(A, r.op_id);
+    assert.equal((await F.listTransactions(A, { tag: 'casa' })).count, 2);
+    const add = await F.editMerchant(A, { name: 'Panaderías', add_tags: ['desayuno'] });
+    assert.equal(add.rows_tagged, 2);
+    await assert.rejects(F.editMerchant(A, { name: 'nope', add_tags: ['x'] }), /not found/);
+    await assert.rejects(F.editMerchant(B, { name: 'Panaderías', add_tags: ['x'] }), /not found/); // other user's merchant
+  });
+
   test('undo refuses to overwrite a later change', async () => {
     const t = (await F.listTransactions(A, { text: 'ANCAP' })).transactions[0];
     const first = await F.categorize(A, { transaction_id: t.id, category: 'Combustible' });

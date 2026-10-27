@@ -96,6 +96,7 @@ export function buildMcpServer(ctx: Ctx, opts: { readOnly?: boolean } = {}): Mcp
   tool('add_planned_event', 'A planned expense (trip, purchase) for the forecast, optionally spread over several months.', S.PlannedEvent, WRITE, (a) => F.addPlannedEvent(ctx, a));
   tool('delete_note', 'Delete a planned event or fact.', z.object({ note_id: z.number().int() }), DESTRUCTIVE, (a) => F.deleteNote(ctx, a.note_id));
   tool('edit_tag', 'Create or edit a tag: parent, rename, archive, notes.', S.TagEdit, WRITE, (a) => F.editTag(ctx, a));
+  tool('edit_merchant', 'Add or remove a merchant\'s tags (every row of the merchant carries them), on its existing rows too. Use it when a rule tagged a whole merchant but the tag only fits some of its rows: give those rows their own merchant with learn_rule, then remove the tag here.', S.MerchantEdit, WRITE, (a) => F.editMerchant(ctx, a));
   tool('edit_category', 'Create or edit a category: nature, parent, rename.', S.CategoryEdit, WRITE, (a) => F.editCategory(ctx, a));
   tool('delete_rule', 'Delete a learned rule (past rows keep their category).', z.object({ rule_id: z.number().int() }), DESTRUCTIVE, (a) => F.deleteRule(ctx, a.rule_id));
   tool('import_statement', 'Import a bank export (Santander UY card or account, Itaú UY account; .xls/.xlsx). Reconciliation must pass. Re-importing is safe: duplicates are skipped.', S.ImportStatement, WRITE, (a) => F.importExport(ctx, a.file_name, Buffer.from(a.content_base64, 'base64'), { force: a.force }));

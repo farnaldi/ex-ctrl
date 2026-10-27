@@ -173,6 +173,16 @@ export const TagEdit = z.object({
   notes: z.string().nullable().optional(),
 });
 
+export const MerchantEdit = z.object({
+  name: z.string().min(1).describe('Existing merchant name (case-insensitive)'),
+  add_tags: z.array(TagName).optional().describe('Tags every row of this merchant gets'),
+  remove_tags: z.array(TagName).optional(),
+  apply_to_transactions: z
+    .boolean()
+    .optional()
+    .describe('Default true: also add/remove the tag on the merchant\'s existing rows (only tags that came from the merchant are removed)'),
+});
+
 export const CategoryEdit = z.object({
   name: z.string().min(1),
   nature: Nature.optional(),
