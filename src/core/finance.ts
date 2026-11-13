@@ -599,7 +599,7 @@ export async function updateTransaction(ctx: Ctx, i: z.infer<typeof S.UpdateTran
 }
 
 /**
- * The web editor's save: field edits and the full tag set in ONE operation, so a single undo reverts the whole save.
+ * The web editor's save: field edits and tags (a full set, or add/remove) in ONE operation, so a single undo reverts the whole save.
  * Tags go first: if the merchant changes, the trigger then adds the new merchant's tags on top of the chosen set.
  */
 export async function saveTransaction(ctx: Ctx, i: z.infer<typeof S.SaveTransaction>) {
@@ -607,6 +607,19 @@ export async function saveTransaction(ctx: Ctx, i: z.infer<typeof S.SaveTransact
     await write(ctx, `edit transaction ${i.transaction_id}`, async (db) => {
       await assertTransaction(db, i.transaction_id);
       if (i.tags) await setTagSet(db, i.transaction_id, i.tags);
+      else {
+        if (i.remove_tags?.length)
+          await db.query(
+            `delete from transaction_tags tt using tags g where g.id = tt.tag_id and tt.transaction_id = $1 and g.name = any($2::text[])`,
+            [i.transaction_id, i.remove_tags],
+          );
+        if (i.add_tags?.length)
+          await db.query(
+            `insert into transaction_tags (transaction_id, tag_id, tagged_by)
+             select $1, f_tag_id(g), 'user' from unnest($2::text[]) g on conflict do nothing`,
+            [i.transaction_id, i.add_tags],
+          );
+      }
       await applyTransactionUpdate(db, i);
       return { transaction: await changedTransaction(db, i.transaction_id) };
     }),
@@ -654,19 +667,22 @@ async function setTagSet(db: Tx, txId: number, tags: string[]) {
 
 /**
  * "Apply to the whole merchant" after recategorizing one row: the merchant's rows still in `from_category` move to
- * `to_category`, and so do its rules that set `from_category` and its default category, so future imports follow.
- * Rows in any other category (answered differently on purpose) and amount-range rules are left alone.
+ * `to_category`, and so do its rules that set `from_category` and its default category if that was `from_category`,
+ * so future imports follow. Anything in another category (rows answered differently on purpose, rules, a default
+ * set to something else) and amount-range rules are left alone. Same category in other capitalization = no-op.
  */
 export async function recategorizeMerchant(ctx: Ctx, i: z.infer<typeof S.MerchantCategory>) {
   return ok(
     await write(ctx, `merchant ${i.merchant}: ${i.from_category ?? 'sin categoría'} → ${i.to_category}`, async (db) => {
       const m = (await db.query<{ id: number; name: string }>(`select id, name from merchants where lower(name) = lower($1)`, [i.merchant])).rows[0];
       if (!m) throw new Error(`merchant "${i.merchant}" not found`);
-      const to = (await db.query<{ id: number }>(`select f_category_id($1, 'variable') as id`, [i.to_category])).rows[0].id;
       const from = i.from_category === null
         ? null
         : (await db.query<{ id: number }>(`select id from categories where lower(name) = lower($1)`, [i.from_category])).rows[0]?.id;
       if (i.from_category !== null && from === undefined) throw new Error(`category "${i.from_category}" not found`);
+      const to = (await db.query<{ id: number }>(`select f_category_id($1, 'variable') as id`, [i.to_category])).rows[0].id;
+      const result = { merchant: m.name, category: i.to_category, rows_updated: 0, rules_updated: 0, default_updated: false };
+      if (from === to) return result; // categories match case-insensitively: nothing to move
       const rows = await db.query(
         `update transactions set category_id = $2, categorized_by = 'user', review_reason = null
          where merchant_id = $1 and category_id is not distinct from $3 and category_id is distinct from $2 returning id`,
@@ -674,11 +690,16 @@ export async function recategorizeMerchant(ctx: Ctx, i: z.infer<typeof S.Merchan
       );
       const rules = await db.query(
         `update merchant_rules set category_id = $2
-         where merchant_id = $1 and category_id = $3 and amount_min is null and amount_max is null returning id`,
+         where merchant_id = $1 and category_id = $3 and category_id is distinct from $2
+           and amount_min is null and amount_max is null returning id`,
         [m.id, to, from],
       );
-      await db.query(`update merchants set default_category_id = $2 where id = $1 and default_category_id is distinct from $2`, [m.id, to]);
-      return { merchant: m.name, category: i.to_category, rows_updated: rows.rowCount ?? 0, rules_updated: rules.rowCount ?? 0 };
+      const def = await db.query(
+        `update merchants set default_category_id = $2
+         where id = $1 and default_category_id is not distinct from $3 and default_category_id is distinct from $2 returning id`,
+        [m.id, to, from],
+      );
+      return { ...result, rows_updated: rows.rowCount ?? 0, rules_updated: rules.rowCount ?? 0, default_updated: Boolean(def.rowCount) };
     }),
   );
 }

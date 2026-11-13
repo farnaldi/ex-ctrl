@@ -1,7 +1,7 @@
 'use client';
 import { useOptimistic, useRef, useState, useTransition } from 'react';
 import { categorizeTx } from '../actions';
-import { useSaveToast } from './use-save-toast';
+import { categoryChange, safely, useSaveToast } from './use-save-toast';
 
 /**
  * Category cell of the list (desktop only; the column is hidden on phones). Click to edit: Enter or leaving the
@@ -20,10 +20,10 @@ export function CategoryCell({ id, category, merchant, listId }: { id: number; c
     if (cancelled.current || next === category) return;
     startTransition(async () => {
       setShown(next);
-      const r = await categorizeTx({ transaction_id: id, category: next ?? '' });
+      const r = await safely(() => categorizeTx({ transaction_id: id, category: next ?? '' }));
       saved(r, {
         message: next ? `Categoría: ${next}.` : 'Categoría quitada.',
-        categoryChange: next && merchant ? { merchant, from: category, to: next } : null,
+        categoryChange: categoryChange(merchant, category, next),
       });
     });
   }

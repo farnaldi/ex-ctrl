@@ -90,6 +90,8 @@ export const UpdateTransaction = z.object({
 /** One save from the web editor: field edits plus the full desired tag set, applied as ONE operation (one undo). */
 export const SaveTransaction = UpdateTransaction.extend({
   tags: z.array(TagName).max(50).optional().describe('The complete tag set the row should end up with'),
+  add_tags: z.array(TagName).max(50).optional().describe('Tags to add (ignored when tags is given)'),
+  remove_tags: z.array(TagName).max(50).optional().describe('Tags to remove (ignored when tags is given)'),
 });
 
 /** "Apply to the whole merchant": move the merchant's rows (and its rules/default) from one category to another. */

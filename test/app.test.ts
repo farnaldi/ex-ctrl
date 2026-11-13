@@ -312,6 +312,14 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.ok((await E.undoOp(A, tagged.opId)).ok);
     assert.deepEqual((await F.getTransaction(A, t.id)).tags.map((g: { tag: string }) => g.tag), ['casa', 'impuestos']);
 
+    // add/remove (what the form sends) keeps a tag someone else added after the form loaded
+    await F.tagTransactions(agentA, { transaction_ids: [t.id], add: ['agente'] });
+    const diff = await E.updateTx(A, { transaction_id: t.id, add_tags: ['anual'], remove_tags: ['impuestos'] });
+    assert.ok(diff.ok);
+    assert.deepEqual((await F.getTransaction(A, t.id)).tags.map((g: { tag: string }) => g.tag), ['agente', 'anual', 'casa']);
+    assert.ok((await E.undoOp(A, diff.ok ? diff.opId : '')).ok);
+    await F.tagTransactions(A, { transaction_ids: [t.id], remove: ['agente'] });
+
     // one undo reverts every field of the save
     const undone = await E.undoOp(A, saved.opId);
     assert.ok(undone.ok, !undone.ok ? undone.error : '');
@@ -382,6 +390,16 @@ describe('app: domain layer and MCP', { skip }, () => {
     const r2 = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'Panadería', to_category: 'Desayunos' });
     assert.equal(r2.ok && r2.rowsUpdated, 1);
     assert.equal((await F.getTransaction(A, fresh[0].id)).category, 'Desayunos');
+
+    // same category in other capitalization: nothing changes, no rule is rewritten
+    const same = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'Desayunos', to_category: 'desayunos' });
+    assert.ok(same.ok);
+    assert.deepEqual(same.ok && [same.rowsUpdated, same.rulesUpdated, same.defaultUpdated], [0, 0, false]);
+    // the default is left alone when it isn't the old category (rows with no category → Regalos keeps Desayunos)
+    await F.updateTransaction(A, { transaction_id: fresh[1].id, category: null });
+    const r3 = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: null, to_category: 'Regalos' });
+    assert.deepEqual(r3.ok && [r3.rowsUpdated, r3.rulesUpdated, r3.defaultUpdated], [1, 0, false]);
+    assert.equal((await F.listMerchants(A, 'Panaderías'))[0].default_category, 'Desayunos');
 
     assert.deepEqual(await E.applyToMerchant(B, { merchant: 'Panaderías', from_category: null, to_category: 'X' }), { ok: false, error: 'No se encontró el comercio.' });
     assert.equal((await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'No existe', to_category: 'X' })).ok, false);

@@ -1,7 +1,7 @@
 'use client';
 import { useId, useState, useTransition } from 'react';
 import { updateTx } from '../actions';
-import { useSaveToast } from './use-save-toast';
+import { categoryChange, safely, useSaveToast } from './use-save-toast';
 
 export type EditorOptions = {
   categories: { name: string; nature: string }[];
@@ -62,13 +62,20 @@ export function TransactionForm({ tx, options }: { tx: EditableTransaction; opti
 
   function save() {
     if (!dirty || pending) return;
-    const finalMerchant = 'merchant' in changes ? (changes.merchant as string | null) : tx.merchant;
-    const newCategory = 'category' in changes ? (changes.category as string | null) : undefined;
+    const payload = { transaction_id: tx.id, ...changes };
+    // the form loaded the tags; send what changed so a tag added meanwhile (e.g. by the agent) isn't removed
+    if ('tags' in changes) {
+      delete (payload as Record<string, unknown>).tags;
+      Object.assign(payload, { add_tags: tags.filter((t) => !tx.tags.includes(t)), remove_tags: tx.tags.filter((t) => !tags.includes(t)) });
+    }
+    // "apply to the merchant" only when the merchant stayed: with a new merchant, "rows in the old category" means
+    // rows of a different merchant
+    const offer = 'category' in changes && !('merchant' in changes)
+      ? categoryChange(tx.merchant, tx.category, changes.category as string | null)
+      : null;
     startTransition(async () => {
-      const r = await updateTx({ transaction_id: tx.id, ...changes });
-      saved(r, {
-        categoryChange: newCategory && finalMerchant ? { merchant: finalMerchant, from: tx.category, to: newCategory } : null,
-      });
+      const r = await safely(() => updateTx(payload));
+      saved(r, { categoryChange: offer });
     });
   }
 

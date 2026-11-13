@@ -20,8 +20,25 @@ export function Drawer({ header, fullPageHref, children }: { header: React.React
       }
       router.back();
     };
+    // keep Tab inside the panel (it's modal) and the page behind from scrolling
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !panel.current) return;
+      const items = [...panel.current.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input,select,textarea,[tabindex]:not([tabindex="-1"])')];
+      if (!items.length) return;
+      const [first, last] = [items[0], items[items.length - 1]];
+      const inside = panel.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+    };
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onTab);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onTab);
+      document.body.style.overflow = overflow;
+    };
   }, [router]);
 
   return (

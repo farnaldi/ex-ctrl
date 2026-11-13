@@ -42,7 +42,7 @@ export async function categorizeTx(ctx: Ctx, input: unknown) {
 export async function applyToMerchant(ctx: Ctx, input: unknown) {
   return attempt(S.MerchantCategory, input, async (i) => {
     const r = await recategorizeMerchant(ctx, i);
-    return { opId: r.op_id, rowsUpdated: r.rows_updated, rulesUpdated: r.rules_updated };
+    return { opId: r.op_id, rowsUpdated: r.rows_updated, rulesUpdated: r.rules_updated, defaultUpdated: r.default_updated };
   });
 }
 
