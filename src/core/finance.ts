@@ -43,6 +43,52 @@ function tagCondition(w: Where, tag: string) {
 // ============================================================ reads
 
 export async function listTransactions(ctx: Ctx, f: S.TransactionFilter) {
+  return read(ctx, (db) => queryTransactions(db, f));
+}
+
+/**
+ * Everything the /movimientos page needs in ONE read transaction (one pooled connection, one begin/commit):
+ * the filtered rows and totals, plus the light option lists for the filter bar.
+ */
+export async function transactionsPage(ctx: Ctx, f: S.TransactionFilter) {
+  return read(ctx, async (db) => {
+    const result = await queryTransactions(db, f);
+    const options = await filterOptions(db);
+    return { ...result, ...options };
+  });
+}
+
+/**
+ * Names only, for filter dropdowns (no per-row counts: those scan transactions and the filter bar doesn't need
+ * them). One statement so the page pays one round trip for all three lists.
+ */
+async function filterOptions(db: Tx) {
+  const r = await db.query(
+    `select
+       (select coalesce(json_agg(json_build_object('id', a.id, 'name', a.name) order by a.name), '[]')
+          from accounts a) as accounts,
+       (select coalesce(json_agg(json_build_object('id', c.id, 'name', c.name) order by c.name), '[]')
+          from categories c
+         where exists (select 1 from transactions t where t.category_id = c.id)) as categories,
+       (select coalesce(json_agg(json_build_object('id', g.id, 'name', g.name, 'parent', p.name)
+                                 order by coalesce(p.name, g.name), g.parent_id nulls first, g.name), '[]')
+          from tags g left join tags p on p.id = g.parent_id
+         where not g.archived) as tags`,
+  );
+  const row = r.rows[0];
+  return {
+    accounts: row.accounts as { id: number; name: string }[],
+    categories: row.categories as { id: number; name: string }[],
+    tags: row.tags as { id: number; name: string; parent: string | null }[],
+  };
+}
+
+/**
+ * Rows + totals for a filter. The conditions below may reference t, c, m (and subqueries). The totals query
+ * joins only c, plus m for merchant/text filters: a new condition on another alias (a, cm, or m elsewhere)
+ * must also update `needsMerchant`/the totals joins, or the totals query fails with "missing FROM-clause entry".
+ */
+async function queryTransactions(db: Tx, f: S.TransactionFilter) {
   const w = new Where();
   if (f.from) w.add(`t.period_month >= ?::date`, monthStart(f.from));
   if (f.to) w.add(`t.period_month <= ?::date`, monthStart(f.to));
@@ -71,36 +117,39 @@ export async function listTransactions(ctx: Ctx, f: S.TransactionFilter) {
   const limit = Math.min(Math.max(Math.trunc(Number(f.limit ?? 100)) || 100, 1), 500);
   const offset = Math.max(Math.trunc(Number(f.offset ?? 0)) || 0, 0);
 
-  const from = `from transactions t
-    join accounts a on a.id = t.account_id
-    left join categories c on c.id = t.category_id
-    left join merchants m on m.id = t.merchant_id
-    left join commitments cm on cm.id = t.commitment_id`;
-
-  return read(ctx, async (db) => {
-    const rows = await db.query(
-      `select t.id, t.posted_on, to_char(t.period_month, 'YYYY-MM') as month, t.description_raw as description,
-              t.amount, t.currency, t.kind, a.id as account_id, a.name as account, m.name as merchant,
-              c.name as category, c.nature, t.categorized_by, t.note, t.review_reason,
-              t.installment_number, t.installment_total, t.commitment_id, cm.description as commitment,
-              coalesce((select array_agg(g.name order by g.name) from transaction_tags tt join tags g on g.id = tt.tag_id
-                        where tt.transaction_id = t.id), '{}') as tags,
-              ${IS_SPENDING} as is_spending,
-              ${IS_ONE_OFF} as one_off
-       ${from} ${w.sql}
-       order by ${order}
-       limit ${limit} offset ${offset}`,
-      w.params,
-    );
-    const totals = await db.query(
-      `select t.currency, count(*)::int as count, sum(t.amount) as net,
-              coalesce(sum(t.amount) filter (where ${IS_SPENDING}), 0) as spending
-       ${from} ${w.sql} group by t.currency order by t.currency desc`,
-      w.params,
-    );
-    const count = totals.rows.reduce((n, r) => n + r.count, 0);
-    return { count, limit, offset, totals: totals.rows, transactions: rows.rows };
-  });
+  const rows = await db.query(
+    `select t.id, t.posted_on, to_char(t.period_month, 'YYYY-MM') as month, t.description_raw as description,
+            t.amount, t.currency, t.kind, a.id as account_id, a.name as account, m.name as merchant,
+            c.name as category, c.nature, t.categorized_by, t.note, t.review_reason,
+            t.installment_number, t.installment_total, t.commitment_id, cm.description as commitment,
+            coalesce((select array_agg(g.name order by g.name) from transaction_tags tt join tags g on g.id = tt.tag_id
+                      where tt.transaction_id = t.id), '{}') as tags,
+            ${IS_SPENDING} as is_spending,
+            ${IS_ONE_OFF} as one_off
+     from transactions t
+       join accounts a on a.id = t.account_id
+       left join categories c on c.id = t.category_id
+       left join merchants m on m.id = t.merchant_id
+       left join commitments cm on cm.id = t.commitment_id
+     ${w.sql}
+     order by ${order}
+     limit ${limit} offset ${offset}`,
+    w.params,
+  );
+  // Totals scan every matching row, so join only what the conditions use: categories always (IS_SPENDING),
+  // merchants only when filtering by merchant or text; accounts and commitments never.
+  const needsMerchant = Boolean(f.merchant || f.text);
+  const totals = await db.query(
+    `select t.currency, count(*)::int as count, sum(t.amount) as net,
+            coalesce(sum(t.amount) filter (where ${IS_SPENDING}), 0) as spending
+     from transactions t
+       left join categories c on c.id = t.category_id
+       ${needsMerchant ? 'left join merchants m on m.id = t.merchant_id' : ''}
+     ${w.sql} group by t.currency order by t.currency desc`,
+    w.params,
+  );
+  const count = totals.rows.reduce((n, r) => n + r.count, 0);
+  return { count, limit, offset, totals: totals.rows, transactions: rows.rows };
 }
 
 export async function getTransaction(ctx: Ctx, id: number) {

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { Amount, Card, CurrencyTabs, Empty, PageTitle, Pill, one, qs, type Params } from '@/components/ui';
 import { KIND_LABEL, dayLabel, isMonth, money, monthLabel } from '@/lib/format';
 import { requireWebCtx } from '@/lib/session';
-import { listAccounts, listCategories, listTags, listTransactions } from '@/src/core/finance';
+import { transactionsPage } from '@/src/core/finance';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,27 +16,24 @@ export default async function Movimientos({ searchParams }: { searchParams: Prom
   const page = Math.max(1, Math.trunc(Number(p('page')) || 1));
   const cuenta = Number(p('cuenta')) || undefined;
 
-  const [result, accounts, categories, tags] = await Promise.all([
-    listTransactions(ctx, {
-      from: isMonth(p('desde')) ? p('desde') : undefined,
-      to: isMonth(p('hasta')) ? p('hasta') : undefined,
-      currency: moneda === 'todas' ? undefined : moneda,
-      account_id: cuenta,
-      category: p('categoria') || undefined,
-      tag: p('tag') || undefined,
-      merchant: p('comercio') || undefined,
-      text: p('q').trim() || undefined,
-      spending_only: p('gasto') === '1' || undefined,
-      pending: p('revisar') === '1' || undefined,
-      one_off: p('puntual') === '1' ? true : undefined,
-      sort: (['date_desc', 'date_asc', 'amount_desc', 'amount_asc'] as const).find((s) => s === p('orden')) ?? 'date_desc',
-      limit: PAGE,
-      offset: (page - 1) * PAGE,
-    }),
-    listAccounts(ctx),
-    listCategories(ctx),
-    listTags(ctx),
-  ]);
+  // One read transaction for rows, totals and the filter bar's options
+  const result = await transactionsPage(ctx, {
+    from: isMonth(p('desde')) ? p('desde') : undefined,
+    to: isMonth(p('hasta')) ? p('hasta') : undefined,
+    currency: moneda === 'todas' ? undefined : moneda,
+    account_id: cuenta,
+    category: p('categoria') || undefined,
+    tag: p('tag') || undefined,
+    merchant: p('comercio') || undefined,
+    text: p('q').trim() || undefined,
+    spending_only: p('gasto') === '1' || undefined,
+    pending: p('revisar') === '1' || undefined,
+    one_off: p('puntual') === '1' ? true : undefined,
+    sort: (['date_desc', 'date_asc', 'amount_desc', 'amount_asc'] as const).find((s) => s === p('orden')) ?? 'date_desc',
+    limit: PAGE,
+    offset: (page - 1) * PAGE,
+  });
+  const { accounts, categories, tags } = result;
 
   const pages = Math.max(1, Math.ceil(result.count / PAGE));
   const filtered = ['desde', 'hasta', 'cuenta', 'categoria', 'tag', 'comercio', 'q', 'gasto', 'revisar', 'puntual'].some((k) => p(k));
@@ -72,14 +69,14 @@ export default async function Movimientos({ searchParams }: { searchParams: Prom
           <span className="text-xs text-muted">Categoría</span>
           <select name="categoria" defaultValue={p('categoria')} className="field">
             <option value="">Todas</option>
-            {categories.filter((c) => c.transactions > 0).map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted">Tag</span>
           <select name="tag" defaultValue={p('tag')} className="field">
             <option value="">Todos</option>
-            {tags.filter((t) => !t.archived).map((t) => <option key={t.id} value={t.name}>{t.parent ? `${t.parent} › ${t.name}` : t.name}</option>)}
+            {tags.map((t) => <option key={t.id} value={t.name}>{t.parent ? `${t.parent} › ${t.name}` : t.name}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">

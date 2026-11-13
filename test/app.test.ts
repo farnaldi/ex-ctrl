@@ -232,6 +232,51 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.equal(await T.verifyApiToken(t.token), null);
   });
 
+  test('transactionsPage: totals match its own rows; same result as listTransactions; light options; RLS', async () => {
+    // A row that is NOT spending (income, other currency), so spending != net and UYU/USD are both present.
+    // Added as one operation and undone at the end, so later tests see the fixture unchanged.
+    const extra = await F.addManualTransaction(A, { date: '2026-02-20', description: 'COBRO FACTURA', amount: -1234.5, currency: 'USD' });
+    try {
+    const filters = [{}, { text: 'espiga' }, { merchant: 'nope' }, { spending_only: true }, { tag: 'casa', from: '2026-02' }, { category: 'Panadería' }];
+    const merchant = (await F.listTransactions(A, { limit: 500 })).transactions.find((t: { merchant: string | null }) => t.merchant)?.merchant;
+    assert.ok(merchant, 'fixture has at least one row with a merchant');
+    filters.push({ merchant });
+    for (const f of filters) {
+      const page = await F.transactionsPage(A, { ...f, limit: 500 });
+      assert.ok(page.count <= 500, 'fixture fits in one page, so totals can be checked against the rows');
+      assert.equal(page.transactions.length, page.count);
+      // independent of the totals SQL: recompute per currency from the returned rows
+      const currencies = new Set(page.transactions.map((t: { currency: string }) => t.currency));
+      assert.equal(page.totals.length, currencies.size);
+      for (const tot of page.totals) {
+        const rs = page.transactions.filter((t: { currency: string }) => t.currency === tot.currency);
+        const sum = (xs: { amount: number }[]) => Math.round(xs.reduce((n, x) => n + x.amount, 0) * 100) / 100;
+        assert.equal(tot.count, rs.length, `count ${JSON.stringify(f)}`);
+        assert.equal(tot.net, sum(rs), `net ${JSON.stringify(f)}`);
+        assert.equal(tot.spending, sum(rs.filter((t: { is_spending: boolean }) => t.is_spending)), `spending ${JSON.stringify(f)}`);
+      }
+      const list = await F.listTransactions(A, { ...f, limit: 500 });
+      assert.deepEqual(page.transactions, list.transactions);
+      assert.deepEqual(page.totals, list.totals);
+    }
+    if (merchant) assert.ok((await F.transactionsPage(A, { merchant })).count > 0, 'merchant filter (merchants join in totals) has matches');
+    const all = await F.transactionsPage(A, {});
+    assert.ok(all.totals.length === 2 && all.totals.some((t: { net: number; spending: number }) => t.net !== t.spending), 'fixture has a non-spending row');
+    } finally {
+      await F.undo(A, extra.op_id);
+    }
+
+    const page = await F.transactionsPage(A, {});
+    assert.deepEqual(page.accounts.map((a) => a.name), (await F.listAccounts(A)).map((a: { name: string }) => a.name));
+    const used = (await F.listCategories(A)).filter((c: { transactions: number }) => c.transactions > 0).map((c: { name: string }) => c.name).sort();
+    assert.deepEqual(page.categories.map((c) => c.name).sort(), used);
+    const active = (await F.listTags(A)).filter((t: { archived: boolean }) => !t.archived).map((t: { name: string; parent: string | null }) => [t.name, t.parent]);
+    assert.deepEqual(page.tags.map((t) => [t.name, t.parent]), active, 'same tags, same order, with parent');
+    const other = await F.transactionsPage(B, {});
+    assert.equal(other.count, 0);
+    assert.equal(other.accounts.length + other.categories.length + other.tags.length, 0);
+  });
+
   test('limit and offset are clamped', async () => {
     const r = await F.listTransactions(A, { limit: '5; drop table users' as unknown as number, offset: -3 });
     assert.equal(r.limit, 100);
