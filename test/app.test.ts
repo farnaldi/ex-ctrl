@@ -232,6 +232,26 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.equal(await T.verifyApiToken(t.token), null);
   });
 
+  test('transactionsPage: same rows and totals as listTransactions, plus light filter options, scoped by RLS', async () => {
+    const filters = [{}, { text: 'espiga' }, { merchant: 'nope' }, { spending_only: true }, { tag: 'casa', from: '2026-02' }];
+    for (const f of filters) {
+      const page = await F.transactionsPage(A, f);
+      const list = await F.listTransactions(A, f);
+      assert.deepEqual(page.transactions, list.transactions);
+      assert.deepEqual(page.totals, list.totals);
+      assert.equal(page.count, list.count);
+    }
+    const page = await F.transactionsPage(A, {});
+    assert.deepEqual(page.accounts.map((a) => a.name), (await F.listAccounts(A)).map((a: { name: string }) => a.name));
+    const used = (await F.listCategories(A)).filter((c: { transactions: number }) => c.transactions > 0).map((c: { name: string }) => c.name).sort();
+    assert.deepEqual(page.categories.map((c) => c.name).sort(), used);
+    const active = (await F.listTags(A)).filter((t: { archived: boolean }) => !t.archived).map((t: { name: string }) => t.name).sort();
+    assert.deepEqual(page.tags.map((t) => t.name).sort(), active);
+    const other = await F.transactionsPage(B, {});
+    assert.equal(other.count, 0);
+    assert.equal(other.accounts.length + other.categories.length + other.tags.length, 0);
+  });
+
   test('limit and offset are clamped', async () => {
     const r = await F.listTransactions(A, { limit: '5; drop table users' as unknown as number, offset: -3 });
     assert.equal(r.limit, 100);
