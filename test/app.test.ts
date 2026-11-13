@@ -283,6 +283,128 @@ describe('app: domain layer and MCP', { skip }, () => {
     assert.equal(r.offset, 0);
   });
 
+  test('web edits: one save is one undoable operation; tag set; inline category; bad input; RLS', async () => {
+    const E = await import('../lib/transaction-edits.ts');
+    const t = (await F.listTransactions(A, { text: 'D.G.I.' })).transactions[0];
+    assert.equal(t.category, null);
+
+    const saved = await E.updateTx(A, { transaction_id: t.id, category: 'Impuestos', note: 'anual', one_off: true, tags: ['impuestos', 'casa'] });
+    assert.ok(saved.ok, !saved.ok ? saved.error : '');
+    let d = await F.getTransaction(A, t.id);
+    assert.equal(d.category, 'Impuestos');
+    assert.equal(d.categorized_by, 'user');
+    assert.equal(d.note, 'anual');
+    assert.equal(d.one_off, true);
+    assert.deepEqual(d.tags.map((g: { tag: string }) => g.tag), ['casa', 'impuestos']);
+    // the whole save is one operation, recorded as the person on the web
+    const op = (await F.listOperations(A))[0];
+    assert.equal(op.op_id, saved.opId);
+    assert.equal(op.actor, 'user');
+    const rows = await F.getOperation(A, saved.opId);
+    assert.ok(rows.some((r: { table_name: string }) => r.table_name === 'transactions'));
+    assert.ok(rows.some((r: { table_name: string }) => r.table_name === 'transaction_tags'));
+    assert.ok(rows.some((r: { table_name: string }) => r.table_name === 'context_notes'));
+
+    // tags are replaced, not merged; undo puts them back
+    const tagged = await E.setTags(A, { transaction_id: t.id, tags: ['impuestos'] });
+    assert.ok(tagged.ok);
+    assert.deepEqual((await F.getTransaction(A, t.id)).tags.map((g: { tag: string }) => g.tag), ['impuestos']);
+    assert.ok((await E.undoOp(A, tagged.opId)).ok);
+    assert.deepEqual((await F.getTransaction(A, t.id)).tags.map((g: { tag: string }) => g.tag), ['casa', 'impuestos']);
+
+    // add/remove (what the form sends) keeps a tag someone else added after the form loaded
+    await F.tagTransactions(agentA, { transaction_ids: [t.id], add: ['agente'] });
+    const diff = await E.updateTx(A, { transaction_id: t.id, add_tags: ['anual'], remove_tags: ['impuestos'] });
+    assert.ok(diff.ok);
+    assert.deepEqual((await F.getTransaction(A, t.id)).tags.map((g: { tag: string }) => g.tag), ['agente', 'anual', 'casa']);
+    assert.ok((await E.undoOp(A, diff.ok ? diff.opId : '')).ok);
+    await F.tagTransactions(A, { transaction_ids: [t.id], remove: ['agente'] });
+
+    // one undo reverts every field of the save
+    const undone = await E.undoOp(A, saved.opId);
+    assert.ok(undone.ok, !undone.ok ? undone.error : '');
+    d = await F.getTransaction(A, t.id);
+    assert.equal(d.category, null);
+    assert.equal(d.note, null);
+    assert.equal(d.one_off, false);
+    assert.deepEqual(d.tags, []);
+    const again = await E.undoOp(A, saved.opId);
+    assert.deepEqual(again, { ok: false, error: 'Ese cambio ya se deshizo.' });
+
+    // inline category: set, then clear with an empty value
+    assert.ok((await E.categorizeTx(A, { transaction_id: t.id, category: ' Impuestos ' })).ok);
+    assert.equal((await F.getTransaction(A, t.id)).category, 'Impuestos');
+    assert.ok((await E.categorizeTx(A, { transaction_id: t.id, category: '' })).ok);
+    assert.equal((await F.getTransaction(A, t.id)).category, null);
+
+    // bad input is a value, not a throw (and nothing is written)
+    const before = (await F.listOperations(A)).length;
+    const bad = await E.categorizeTx(A, { transaction_id: 'x', category: 'Impuestos' });
+    assert.equal(bad.ok, false);
+    assert.match(!bad.ok ? bad.error : '', /Datos inválidos/);
+    assert.equal((await E.updateTx(A, { transaction_id: t.id, tags: ['dos palabras'] })).ok, false);
+    assert.equal((await E.undoOp(A, 'not-a-uuid')).ok, false);
+    assert.equal((await F.listOperations(A)).length, before);
+
+    // another user can't edit, retag or undo A's rows (RLS makes them invisible)
+    assert.deepEqual(await E.updateTx(B, { transaction_id: t.id, note: 'hack' }), { ok: false, error: 'No se encontró el movimiento.' });
+    assert.equal((await E.setTags(B, { transaction_id: t.id, tags: ['hack'] })).ok, false);
+    assert.equal((await E.categorizeTx(B, { transaction_id: t.id, category: 'Hack' })).ok, false);
+    assert.equal((await E.undoOp(B, (await F.listOperations(A))[0].op_id)).ok, false);
+    d = await F.getTransaction(A, t.id);
+    assert.equal(d.note, null);
+    assert.deepEqual(d.tags, []);
+    assert.equal((await F.listOperations(B)).length, 0);
+  });
+
+  test('apply to the whole merchant: rows in the old category, its rules and default move; future imports follow; undoable', async () => {
+    const E = await import('../lib/transaction-edits.ts');
+    // the two bakery rows are in Panadería through the rule "PANADERIA" → Panaderías
+    const [first, second] = (await F.listTransactions(A, { merchant: 'Panaderías' })).transactions;
+    // one row answered differently on purpose stays where it is
+    await F.updateTransaction(A, { transaction_id: second.id, category: 'Regalos' });
+    await F.updateTransaction(A, { transaction_id: first.id, category: 'Desayunos' });
+    const r = await E.applyToMerchant(A, { merchant: 'panaderías', from_category: 'Panadería', to_category: 'Desayunos' });
+    assert.ok(r.ok, !r.ok ? r.error : '');
+    assert.equal(r.ok && r.rowsUpdated, 0); // first is already in Desayunos; second is in Regalos
+    assert.equal(r.ok && r.rulesUpdated, 1);
+    assert.equal((await F.listRules(A, 'PANADERIA'))[0].category, 'Desayunos');
+    assert.equal((await F.listMerchants(A, 'Panaderías'))[0].default_category, 'Desayunos');
+    assert.equal((await F.getTransaction(A, second.id)).category, 'Regalos');
+
+    // undo restores the rule; redo (undo the undo) brings it back
+    const u = await E.undoOp(A, r.ok ? r.opId : '');
+    assert.ok(u.ok);
+    assert.equal((await F.listRules(A, 'PANADERIA'))[0].category, 'Panadería');
+    assert.ok((await E.undoOp(A, u.ok ? u.opId : '')).ok);
+
+    // a new export with a bakery purchase lands in the new category
+    const imp = await F.importExport(A, 'itau-feb-otra.xls', itauStatement('7654321'));
+    assert.equal(imp.status, 'imported');
+    const fresh = (await F.listTransactions(A, { merchant: 'Panaderías' })).transactions.filter((x: { id: number }) => x.id !== first.id && x.id !== second.id);
+    assert.equal(fresh.length, 2);
+    assert.ok(fresh.every((x: { category: string }) => x.category === 'Desayunos'));
+
+    // rows still in the old category move
+    await F.updateTransaction(A, { transaction_id: fresh[0].id, category: 'Panadería' });
+    const r2 = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'Panadería', to_category: 'Desayunos' });
+    assert.equal(r2.ok && r2.rowsUpdated, 1);
+    assert.equal((await F.getTransaction(A, fresh[0].id)).category, 'Desayunos');
+
+    // same category in other capitalization: nothing changes, no rule is rewritten
+    const same = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'Desayunos', to_category: 'desayunos' });
+    assert.ok(same.ok);
+    assert.deepEqual(same.ok && [same.rowsUpdated, same.rulesUpdated, same.defaultUpdated], [0, 0, false]);
+    // the default is left alone when it isn't the old category (rows with no category → Regalos keeps Desayunos)
+    await F.updateTransaction(A, { transaction_id: fresh[1].id, category: null });
+    const r3 = await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: null, to_category: 'Regalos' });
+    assert.deepEqual(r3.ok && [r3.rowsUpdated, r3.rulesUpdated, r3.defaultUpdated], [1, 0, false]);
+    assert.equal((await F.listMerchants(A, 'Panaderías'))[0].default_category, 'Desayunos');
+
+    assert.deepEqual(await E.applyToMerchant(B, { merchant: 'Panaderías', from_category: null, to_category: 'X' }), { ok: false, error: 'No se encontró el comercio.' });
+    assert.equal((await E.applyToMerchant(A, { merchant: 'Panaderías', from_category: 'No existe', to_category: 'X' })).ok, false);
+  });
+
   test('MCP server: tools listed and callable as the agent', async () => {
     const { createMcpHandler } = await import('@modelcontextprotocol/server');
     const { buildMcpServer } = await import('../src/mcp/server.ts');

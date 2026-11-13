@@ -87,6 +87,20 @@ export const UpdateTransaction = z.object({
   commitment_id: z.number().int().nullable().optional().describe('Link to (or unlink from) a commitment'),
 });
 
+/** One save from the web editor: field edits plus the full desired tag set, applied as ONE operation (one undo). */
+export const SaveTransaction = UpdateTransaction.extend({
+  tags: z.array(TagName).max(50).optional().describe('The complete tag set the row should end up with'),
+  add_tags: z.array(TagName).max(50).optional().describe('Tags to add (ignored when tags is given)'),
+  remove_tags: z.array(TagName).max(50).optional().describe('Tags to remove (ignored when tags is given)'),
+});
+
+/** "Apply to the whole merchant": move the merchant's rows (and its rules/default) from one category to another. */
+export const MerchantCategory = z.object({
+  merchant: z.string().min(1).describe('Merchant name (case-insensitive)'),
+  from_category: z.string().nullable().describe('Rows currently in this category move (null = rows with no category)'),
+  to_category: z.string().min(1).describe('Category name; created if missing'),
+});
+
 export const Tagging = z.object({
   transaction_ids: z.array(z.number().int()).min(1).max(500),
   add: z.array(TagName).optional(),

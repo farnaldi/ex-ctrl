@@ -3,6 +3,7 @@ import { Amount, Card, CurrencyTabs, Empty, PageTitle, Pill, one, qs, type Param
 import { KIND_LABEL, dayLabel, isMonth, money, monthLabel } from '@/lib/format';
 import { requireWebCtx } from '@/lib/session';
 import { transactionsPage } from '@/src/core/finance';
+import { CategoryCell } from './_components/category-cell';
 
 export const dynamic = 'force-dynamic';
 
@@ -114,6 +115,9 @@ export default async function Movimientos({ searchParams }: { searchParams: Prom
         </div>
       )}
 
+      {/* suggestions for the inline category editor: every category the person already uses */}
+      <datalist id="movimientos-categorias">{categories.map((c) => <option key={c.id} value={c.name} />)}</datalist>
+
       <Card>
         {result.transactions.length === 0 ? (
           <Empty>No hay movimientos con estos filtros.</Empty>
@@ -150,7 +154,9 @@ export default async function Movimientos({ searchParams }: { searchParams: Prom
                         {(t.review_reason || (!t.category && t.is_spending)) && <Pill tone="danger">revisar</Pill>}
                       </div>
                     </td>
-                    <td className="hidden px-2 py-2.5 md:table-cell">{t.category ?? <span className="text-muted">—</span>}</td>
+                    <td className="hidden px-2 py-2.5 md:table-cell">
+                      <CategoryCell id={t.id} category={t.category} merchant={t.merchant} listId="movimientos-categorias" />
+                    </td>
                     <td className="hidden max-w-48 truncate px-2 py-2.5 text-muted lg:table-cell">{t.account}</td>
                     <td className="px-4 py-2.5 text-right"><Amount value={t.amount} currency={t.currency} decimals={2} /></td>
                   </tr>
