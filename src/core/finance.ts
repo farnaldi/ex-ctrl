@@ -58,27 +58,36 @@ export async function transactionsPage(ctx: Ctx, f: S.TransactionFilter) {
   });
 }
 
-/** Names only, for filter dropdowns (no per-row counts: those scan transactions and the filter bar doesn't need them). */
+/**
+ * Names only, for filter dropdowns (no per-row counts: those scan transactions and the filter bar doesn't need
+ * them). One statement so the page pays one round trip for all three lists.
+ */
 async function filterOptions(db: Tx) {
-  // Sequential on purpose: one client runs one query at a time (pg deprecates overlapping calls)
-  const accounts = await db.query(`select a.id, a.name from accounts a order by a.name`);
-  const categories = await db.query(
-    `select c.id, c.name from categories c
-     where exists (select 1 from transactions t where t.category_id = c.id)
-     order by c.name`,
+  const r = await db.query(
+    `select
+       (select coalesce(json_agg(json_build_object('id', a.id, 'name', a.name) order by a.name), '[]')
+          from accounts a) as accounts,
+       (select coalesce(json_agg(json_build_object('id', c.id, 'name', c.name) order by c.name), '[]')
+          from categories c
+         where exists (select 1 from transactions t where t.category_id = c.id)) as categories,
+       (select coalesce(json_agg(json_build_object('id', g.id, 'name', g.name, 'parent', p.name)
+                                 order by coalesce(p.name, g.name), g.parent_id nulls first, g.name), '[]')
+          from tags g left join tags p on p.id = g.parent_id
+         where not g.archived) as tags`,
   );
-  const tags = await db.query(
-    `select g.id, g.name, p.name as parent from tags g left join tags p on p.id = g.parent_id
-     where not g.archived
-     order by coalesce(p.name, g.name), g.parent_id nulls first, g.name`,
-  );
+  const row = r.rows[0];
   return {
-    accounts: accounts.rows as { id: number; name: string }[],
-    categories: categories.rows as { id: number; name: string }[],
-    tags: tags.rows as { id: number; name: string; parent: string | null }[],
+    accounts: row.accounts as { id: number; name: string }[],
+    categories: row.categories as { id: number; name: string }[],
+    tags: row.tags as { id: number; name: string; parent: string | null }[],
   };
 }
 
+/**
+ * Rows + totals for a filter. The conditions below may reference t, c, m (and subqueries). The totals query
+ * joins only c, plus m for merchant/text filters: a new condition on another alias (a, cm, or m elsewhere)
+ * must also update `needsMerchant`/the totals joins, or the totals query fails with "missing FROM-clause entry".
+ */
 async function queryTransactions(db: Tx, f: S.TransactionFilter) {
   const w = new Where();
   if (f.from) w.add(`t.period_month >= ?::date`, monthStart(f.from));
