@@ -153,28 +153,62 @@ async function queryTransactions(db: Tx, f: S.TransactionFilter) {
 }
 
 export async function getTransaction(ctx: Ctx, id: number) {
+  return read(ctx, (db) => transactionDetail(db, id));
+}
+
+/**
+ * The edit drawer / detail page in ONE read: the transaction with its history, plus the pickers' options
+ * (every category, non-archived tags, merchant names, active commitments in the row's currency).
+ */
+export async function transactionEditor(ctx: Ctx, id: number) {
   return read(ctx, async (db) => {
+    const transaction = await transactionDetail(db, id);
     const r = await db.query(
-      `select t.*, to_char(t.period_month, 'YYYY-MM') as month, a.name as account, c.name as category, c.nature,
-              m.name as merchant, cm.description as commitment,
-              coalesce((select json_agg(json_build_object('tag', g.name, 'tagged_by', tt.tagged_by) order by g.name)
-                        from transaction_tags tt join tags g on g.id = tt.tag_id where tt.transaction_id = t.id), '[]') as tags,
-              ${IS_SPENDING} as is_spending, ${IS_ONE_OFF} as one_off
-       from transactions t join accounts a on a.id = t.account_id
-       left join categories c on c.id = t.category_id left join merchants m on m.id = t.merchant_id
-       left join commitments cm on cm.id = t.commitment_id
-       where t.id = $1`,
-      [id],
+      `select
+         (select coalesce(json_agg(json_build_object('name', c.name, 'nature', c.nature) order by c.name), '[]')
+            from categories c) as categories,
+         (select coalesce(json_agg(json_build_object('name', g.name, 'parent', p.name)
+                                   order by coalesce(p.name, g.name), g.parent_id nulls first, g.name), '[]')
+            from tags g left join tags p on p.id = g.parent_id where not g.archived) as tags,
+         (select coalesce(json_agg(m.name order by m.name), '[]') from merchants m) as merchants,
+         (select coalesce(json_agg(json_build_object('id', c.id, 'description', c.description) order by c.description), '[]')
+            from commitments c where c.currency = $1 and (c.status = 'active' or c.id = $2)) as commitments`,
+      [transaction.currency, transaction.commitment_id ?? null],
     );
-    if (!r.rows.length) throw new Error(`transaction ${id} not found`);
-    const history = await db.query(
-      `select l.op_id, l.at, l.actor, l.source, l.operation, l.op, l.before, l.after, l.undone_by
-       from audit_log l where l.table_name = 'transactions' and l.row_key = jsonb_build_object('id', $1::bigint)
-       order by l.id desc limit 20`,
-      [id],
-    );
-    return { ...r.rows[0], history: history.rows };
+    const o = r.rows[0];
+    return {
+      transaction,
+      options: {
+        categories: o.categories as { name: string; nature: string }[],
+        tags: o.tags as { name: string; parent: string | null }[],
+        merchants: o.merchants as string[],
+        commitments: o.commitments as { id: number; description: string }[],
+      },
+    };
   });
+}
+
+async function transactionDetail(db: Tx, id: number) {
+  const r = await db.query(
+    `select t.*, to_char(t.period_month, 'YYYY-MM') as month, a.name as account, c.name as category, c.nature,
+            m.name as merchant, cm.description as commitment,
+            coalesce((select json_agg(json_build_object('tag', g.name, 'tagged_by', tt.tagged_by) order by g.name)
+                      from transaction_tags tt join tags g on g.id = tt.tag_id where tt.transaction_id = t.id), '[]') as tags,
+            ${IS_SPENDING} as is_spending, ${IS_ONE_OFF} as one_off
+     from transactions t join accounts a on a.id = t.account_id
+     left join categories c on c.id = t.category_id left join merchants m on m.id = t.merchant_id
+     left join commitments cm on cm.id = t.commitment_id
+     where t.id = $1`,
+    [id],
+  );
+  if (!r.rows.length) throw new Error(`transaction ${id} not found`);
+  const history = await db.query(
+    `select l.op_id, l.at, l.actor, l.source, l.operation, l.op, l.before, l.after, l.undone_by
+     from audit_log l where l.table_name = 'transactions' and l.row_key = jsonb_build_object('id', $1::bigint)
+     order by l.id desc limit 20`,
+    [id],
+  );
+  return { ...r.rows[0], history: history.rows };
 }
 
 /** Spending totals (never mixes currencies). Tag totals roll up to parent tags and can overlap. */
@@ -557,23 +591,94 @@ export async function learnRule(ctx: Ctx, i: z.infer<typeof S.LearnRule>) {
 export async function updateTransaction(ctx: Ctx, i: z.infer<typeof S.UpdateTransaction>) {
   return ok(
     await write(ctx, `edit transaction ${i.transaction_id}`, async (db) => {
-      const exists = await db.query(`select 1 from transactions where id = $1`, [i.transaction_id]);
-      if (!exists.rows.length) throw new Error(`transaction ${i.transaction_id} not found`);
-      const sets: string[] = [];
-      const params: unknown[] = [i.transaction_id];
-      const p = (v: unknown) => {
-        params.push(v);
-        return `$${params.length}`;
-      };
-      if (i.category !== undefined)
-        sets.push(i.category === null ? `category_id = null, categorized_by = null` : `category_id = f_category_id(${p(i.category)}, 'variable'), categorized_by = 'user', review_reason = null`);
-      if (i.kind) sets.push(`kind = ${p(i.kind)}`);
-      if (i.note !== undefined) sets.push(`note = ${p(i.note)}`);
-      if (i.merchant !== undefined) sets.push(`merchant_id = ${i.merchant === null ? 'null' : `f_merchant_id(${p(i.merchant)})`}`);
-      if (i.commitment_id !== undefined) sets.push(`commitment_id = ${p(i.commitment_id)}`);
-      if (sets.length) await db.query(`update transactions set ${sets.join(', ')} where id = $1`, params);
-      if (i.one_off !== undefined) await setOneOff(db, i.transaction_id, i.one_off);
+      await assertTransaction(db, i.transaction_id);
+      await applyTransactionUpdate(db, i);
       return { transaction: await changedTransaction(db, i.transaction_id) };
+    }),
+  );
+}
+
+/**
+ * The web editor's save: field edits and the full tag set in ONE operation, so a single undo reverts the whole save.
+ * Tags go first: if the merchant changes, the trigger then adds the new merchant's tags on top of the chosen set.
+ */
+export async function saveTransaction(ctx: Ctx, i: z.infer<typeof S.SaveTransaction>) {
+  return ok(
+    await write(ctx, `edit transaction ${i.transaction_id}`, async (db) => {
+      await assertTransaction(db, i.transaction_id);
+      if (i.tags) await setTagSet(db, i.transaction_id, i.tags);
+      await applyTransactionUpdate(db, i);
+      return { transaction: await changedTransaction(db, i.transaction_id) };
+    }),
+  );
+}
+
+async function assertTransaction(db: Tx, id: number) {
+  // under RLS another user's row is invisible, so this is also the ownership check
+  const exists = await db.query(`select 1 from transactions where id = $1`, [id]);
+  if (!exists.rows.length) throw new Error(`transaction ${id} not found`);
+}
+
+/** Field edits for a row the caller already checked with assertTransaction. */
+async function applyTransactionUpdate(db: Tx, i: z.infer<typeof S.UpdateTransaction>) {
+  const sets: string[] = [];
+  const params: unknown[] = [i.transaction_id];
+  const p = (v: unknown) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  if (i.category !== undefined)
+    sets.push(i.category === null ? `category_id = null, categorized_by = null` : `category_id = f_category_id(${p(i.category)}, 'variable'), categorized_by = 'user', review_reason = null`);
+  if (i.kind) sets.push(`kind = ${p(i.kind)}`);
+  if (i.note !== undefined) sets.push(`note = ${p(i.note)}`);
+  if (i.merchant !== undefined) sets.push(`merchant_id = ${i.merchant === null ? 'null' : `f_merchant_id(${p(i.merchant)})`}`);
+  if (i.commitment_id !== undefined) sets.push(`commitment_id = ${p(i.commitment_id)}`);
+  if (sets.length) await db.query(`update transactions set ${sets.join(', ')} where id = $1`, params);
+  if (i.one_off !== undefined) await setOneOff(db, i.transaction_id, i.one_off);
+}
+
+/** Make the row's tags exactly `tags`: new ones are recorded as the user's, missing ones are removed. */
+async function setTagSet(db: Tx, txId: number, tags: string[]) {
+  await db.query(
+    `delete from transaction_tags tt using tags g
+     where g.id = tt.tag_id and tt.transaction_id = $1 and not (g.name = any($2::text[]))`,
+    [txId, tags],
+  );
+  if (tags.length)
+    await db.query(
+      `insert into transaction_tags (transaction_id, tag_id, tagged_by)
+       select $1, f_tag_id(g), 'user' from unnest($2::text[]) g on conflict do nothing`,
+      [txId, tags],
+    );
+}
+
+/**
+ * "Apply to the whole merchant" after recategorizing one row: the merchant's rows still in `from_category` move to
+ * `to_category`, and so do its rules that set `from_category` and its default category, so future imports follow.
+ * Rows in any other category (answered differently on purpose) and amount-range rules are left alone.
+ */
+export async function recategorizeMerchant(ctx: Ctx, i: z.infer<typeof S.MerchantCategory>) {
+  return ok(
+    await write(ctx, `merchant ${i.merchant}: ${i.from_category ?? 'sin categoría'} → ${i.to_category}`, async (db) => {
+      const m = (await db.query<{ id: number; name: string }>(`select id, name from merchants where lower(name) = lower($1)`, [i.merchant])).rows[0];
+      if (!m) throw new Error(`merchant "${i.merchant}" not found`);
+      const to = (await db.query<{ id: number }>(`select f_category_id($1, 'variable') as id`, [i.to_category])).rows[0].id;
+      const from = i.from_category === null
+        ? null
+        : (await db.query<{ id: number }>(`select id from categories where lower(name) = lower($1)`, [i.from_category])).rows[0]?.id;
+      if (i.from_category !== null && from === undefined) throw new Error(`category "${i.from_category}" not found`);
+      const rows = await db.query(
+        `update transactions set category_id = $2, categorized_by = 'user', review_reason = null
+         where merchant_id = $1 and category_id is not distinct from $3 and category_id is distinct from $2 returning id`,
+        [m.id, to, from],
+      );
+      const rules = await db.query(
+        `update merchant_rules set category_id = $2
+         where merchant_id = $1 and category_id = $3 and amount_min is null and amount_max is null returning id`,
+        [m.id, to, from],
+      );
+      await db.query(`update merchants set default_category_id = $2 where id = $1 and default_category_id is distinct from $2`, [m.id, to]);
+      return { merchant: m.name, category: i.to_category, rows_updated: rows.rowCount ?? 0, rules_updated: rules.rowCount ?? 0 };
     }),
   );
 }
